@@ -70,10 +70,10 @@ class LandsatIRDataset(Dataset):
             "Install it with: pip install rasterio"
         )
         self.ir_files = sorted(
-            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith(".tif")]
+            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg"))]
         )
         self.rgb_files = sorted(
-            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith(".tif")]
+            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg"))]
         )
         assert len(self.ir_files) == len(self.rgb_files), (
             f"IR and RGB file counts do not match: {len(self.ir_files)} vs {len(self.rgb_files)}"
@@ -95,14 +95,19 @@ class LandsatIRDataset(Dataset):
 
         # Handle IR arrays (either 1 channel or 3 channel)
         if ir_arr.shape[0] == 1:
-            ir_arr = np.clip(ir_arr, IR_DN_MIN, IR_DN_MAX)
-            ir_arr = (ir_arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
-            ir_arr = ir_arr * 2.0 - 1.0
+            if ir_arr.max() <= 255.0:
+                ir_arr = ir_arr / 255.0 * 2.0 - 1.0
+            else:
+                ir_arr = np.clip(ir_arr, IR_DN_MIN, IR_DN_MAX)
+                ir_arr = (ir_arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
+                ir_arr = ir_arr * 2.0 - 1.0
         elif ir_arr.shape[0] >= 3:
             # Multi-band: B10, B6, B5
-            # Apply normalizations per band. For now, clip and scale globally or per band.
-            ir_arr = np.clip(ir_arr, 0.0, 65535.0)
-            ir_arr = (ir_arr / 65535.0) * 2.0 - 1.0
+            if ir_arr.max() <= 255.0:
+                ir_arr = ir_arr / 255.0 * 2.0 - 1.0
+            else:
+                ir_arr = np.clip(ir_arr, 0.0, 65535.0)
+                ir_arr = (ir_arr / 65535.0) * 2.0 - 1.0
 
         # Handle RGB arrays
         if rgb_arr.max() > 255.0:
