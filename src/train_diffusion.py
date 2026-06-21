@@ -199,14 +199,6 @@ def train(args):
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {total_params:,}")
 
-    # torch.compile: fuses kernels → ~30% faster on L40S (PyTorch 2.0+)
-    try:
-        model = torch.compile(model, mode="reduce-overhead")
-        print(f"  torch.compile: ENABLED (reduce-overhead mode)")
-    except Exception as e:
-        print(f"  torch.compile: SKIPPED ({e})")
-    print()
-
     # EMA Model
     ema = EMAModel(model, decay=0.9999)
 
