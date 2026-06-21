@@ -26,20 +26,18 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
         modifier=planetary_computer.sign_inplace,
     )
     
-    # Instead of a massive bounding box that crashes the API, we use a single Point (New Delhi region).
-    # This forces the STAC API to only search one Landsat path/row, returning the 50 images instantly.
-    point = {"type": "Point", "coordinates": [77.2, 28.6]}
-    
-    print(f"Searching for up to {num_scenes} cloud-free (<5%) Landsat 8/9 scenes...")
+    print(f"Applying strict limits to bypass API timeout...")
     search = catalog.search(
         collections=["landsat-c2-l2"],
-        intersects=point,
-        query={"eo:cloud_cover": {"lt": 5}}, 
+        bbox=[77.0, 28.0, 78.0, 29.0], # Very small region
+        datetime="2023-01-01/2023-12-31",
+        query={"eo:cloud_cover": {"lt": 5}},
+        limit=50, # Forces the API to stop scanning early
         max_items=num_scenes
     )
     
     items = list(search.items())
-    print(f"Found {len(items)} pristine scenes.")
+    print(f"Found {len(items)} pristine low-cloud scenes.")
     
     success_count = 0
     for i, item in enumerate(items):
