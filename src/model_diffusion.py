@@ -32,7 +32,7 @@ class ConditionalDiffusionModel(nn.Module):
             in_channels=ir_channels + rgb_channels,
             out_channels=rgb_channels,
             layers_per_block=2,
-            block_out_channels=(64, 128, 256, 512),
+            block_out_channels=(32, 64, 128, 256),
             down_block_types=(
                 "DownBlock2D",
                 "DownBlock2D",
