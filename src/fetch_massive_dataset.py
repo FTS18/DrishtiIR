@@ -11,7 +11,7 @@ except ImportError:
     import sys
     sys.exit(1)
 
-def fetch_massive_dataset(num_scenes=50, crop_size=512, output_dir='data/train_massive'):
+def fetch_massive_dataset(num_scenes=100, crop_size=512, output_dir='data/train_massive'):
     os.makedirs(f'{output_dir}/ir_multiband', exist_ok=True)
     os.makedirs(f'{output_dir}/rgb', exist_ok=True)
     
@@ -26,7 +26,7 @@ def fetch_massive_dataset(num_scenes=50, crop_size=512, output_dir='data/train_m
         collections=["landsat-c2-l2"],
         bbox=[77.0, 28.0, 78.0, 29.0],
         datetime="2023-01-01/2023-12-31",
-        max_items=200
+        max_items=400
     )
     
     try:
@@ -97,4 +97,4 @@ def fetch_massive_dataset(num_scenes=50, crop_size=512, output_dir='data/train_m
     print(f"\nFinished! Successfully downloaded {success_count} multi-band pairs.")
 
 if __name__ == '__main__':
-    fetch_massive_dataset(num_scenes=50, crop_size=512)
+    fetch_massive_dataset(num_scenes=100, crop_size=512)
