@@ -451,7 +451,7 @@ if __name__ == "__main__":
     parser.add_argument("--rgb-dir",        type=str,   required=True)
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples")
-    parser.add_argument("--num-epochs",     type=int,   default=200)
+    parser.add_argument("--num-epochs",     type=int,   default=300)
     # L40S: 48GB VRAM → batch 16 fits at 256×256 easily
     parser.add_argument("--batch-size",     type=int,   default=16)
     # Separate LRs for G and D (standard practice for stable GAN training)

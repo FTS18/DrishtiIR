@@ -357,7 +357,7 @@ if __name__ == "__main__":
     parser.add_argument("--rgb-dir",        type=str,   default=None)
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples_diffusion")
-    parser.add_argument("--num-epochs",     type=int,   default=300)
+    parser.add_argument("--num-epochs",     type=int,   default=500)
     # L40S has 48GB VRAM — batch 16 at 256px fits easily and fills the GPU properly
     parser.add_argument("--batch-size",     type=int,   default=16)
     # With batch=16 we don't need grad accumulation
