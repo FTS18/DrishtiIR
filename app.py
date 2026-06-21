@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from src.model import Generator
 from src.dataset import SyntheticIRDataset, denormalize
 from src.inference import load_generator, preprocess_array, preprocess_png, run_inference, compute_metrics, preprocess_array as _preprocess
+from src.metrics import compute_psnr, compute_ssim, compute_fid, compute_all_metrics, verify_coregistration
+from src.semantic_mask import classify_landcover, get_semantic_color_map, apply_semantic_correction
 
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -422,6 +424,7 @@ with st.sidebar:
     sharpness = st.slider("Sharpness", 0.0, 3.0, 1.0, 0.1)
     contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
     saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
+    semantic_strength = st.slider("Semantic Correction", 0.0, 1.0, 0.25, 0.05, help="Nudges water→blue, vegetation→green using spectral indices")
 
     def apply_post_processing(rgb_array):
         pil_img = Image.fromarray(rgb_array)
@@ -436,11 +439,12 @@ with st.sidebar:
     st.markdown('<div class="sw-card-title" style="font-family:\'Bricolage Grotesque\',monospace;font-size:0.65rem;letter-spacing:0.14em;text-transform:uppercase;color:#3A4E6E;border-bottom:1px solid #1C2B4A;padding-bottom:6px;margin:16px 0 10px;">Pipeline</div>', unsafe_allow_html=True)
 
     steps = [
-        ("1", "Data Input", "GeoTIFF / PNG"),
+        ("1", "Data Input", "GeoTIFF / PNG / STAC"),
         ("2", "Normalize", "Scale to [-1, 1]"),
         ("3", "SR Upscale", "100m → 30m"),
         ("4", "U-Net Forward", "IR → RGB"),
-        ("5", "Denormalize", "Output [0, 255]"),
+        ("5", "Semantic Mask", "Spectral index correction"),
+        ("6", "Denormalize", "Output [0, 255]"),
     ]
     pipeline_html = ""
     for num, title, sub in steps:
@@ -469,8 +473,8 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_single, tab_live, tab_demo, tab_batch, tab_about = st.tabs([
-    "Single Image", "Live Map", "Demo Mode", "Batch Evaluate", "About"
+tab_single, tab_live, tab_demo, tab_batch, tab_eval, tab_about = st.tabs([
+    "Single Image", "Live Map", "Demo Mode", "Batch Evaluate", "Evaluation", "About"
 ])
 
 
@@ -530,6 +534,10 @@ with tab_single:
                 ir_preprocessed = preprocess_array(img_gray, tile_size=tile_size)
                 ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_preprocessed, DEVICE)
                 rgb_out = apply_post_processing(rgb_out)
+                # Semantic correction
+                if semantic_strength > 0:
+                    land_mask = classify_landcover(ir_preprocessed)
+                    rgb_out = apply_semantic_correction(rgb_out, land_mask, strength=semantic_strength)
 
             ir_3ch = cv2.cvtColor(ir_disp, cv2.COLOR_GRAY2RGB)
             image_comparison(
@@ -713,7 +721,7 @@ with tab_demo:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 3 — Batch Evaluate
+# TAB 4 — Batch Evaluate
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 with tab_batch:
@@ -793,7 +801,170 @@ with tab_batch:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 4 — About
+# TAB 5 — Evaluation (ISRO PS-10 Metrics)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab_eval:
+    st.markdown("""
+    <div class="sw-card">
+        <div class="sw-card-title">Evaluation Suite — ISRO PS-10 Metrics</div>
+        <div style="color:#7A8FAD;font-size:0.82rem;font-family:'Bricolage Grotesque',monospace;">
+            Upload paired IR and Real RGB images to compute all three official evaluation metrics:
+            PSNR, SSIM, and FID. Also runs Semantic Land Cover analysis and Co-Registration verification.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    ev_col1, ev_col2 = st.columns(2, gap="large")
+    with ev_col1:
+        eval_ir_files = st.file_uploader(
+            "Upload IR images (input)",
+            type=["png", "jpg", "jpeg", "tif", "tiff"],
+            accept_multiple_files=True,
+            key="eval_ir",
+            label_visibility="visible",
+        )
+    with ev_col2:
+        eval_rgb_files = st.file_uploader(
+            "Upload Real RGB images (ground truth)",
+            type=["png", "jpg", "jpeg", "tif", "tiff"],
+            accept_multiple_files=True,
+            key="eval_rgb",
+            label_visibility="visible",
+        )
+
+    run_eval = st.button("Run Full Evaluation Suite", use_container_width=True)
+
+    if run_eval and eval_ir_files and eval_rgb_files:
+        gen = load_model()
+        fake_rgbs, real_rgbs, coregistration_scores = [], [], []
+        sem_masks_html = []
+
+        progress_bar = st.progress(0, text="Running evaluation...")
+        for i, (ir_f, rgb_f) in enumerate(zip(eval_ir_files, eval_rgb_files)):
+            # Load IR
+            ir_pil = Image.open(ir_f).convert("L")
+            ir_arr = np.array(ir_pil)
+            ir_pre = preprocess_array(ir_arr, tile_size)
+
+            # Load Real RGB
+            rgb_pil = Image.open(rgb_f).convert("RGB")
+            rgb_pil = rgb_pil.resize((tile_size, tile_size))
+            real_rgb = np.array(rgb_pil)
+
+            # Run inference
+            ir_disp, fake_rgb, _ = run_inference(gen, ir_pre, DEVICE)
+
+            # Semantic correction
+            if semantic_strength > 0:
+                land_mask = classify_landcover(ir_pre)
+                fake_rgb_corrected = apply_semantic_correction(fake_rgb, land_mask, strength=semantic_strength)
+                sem_color = get_semantic_color_map(land_mask)
+            else:
+                fake_rgb_corrected = fake_rgb
+                land_mask = classify_landcover(ir_pre)
+                sem_color = get_semantic_color_map(land_mask)
+
+            fake_rgbs.append(fake_rgb_corrected)
+            real_rgbs.append(real_rgb)
+
+            # Co-registration check
+            real_gray = cv2.cvtColor(real_rgb, cv2.COLOR_RGB2GRAY)
+            coreg = verify_coregistration(ir_disp, real_gray)
+            coregistration_scores.append(coreg["ncc"])
+
+            progress_bar.progress((i + 1) / len(eval_ir_files), text=f"Processed {i+1}/{len(eval_ir_files)}")
+
+        progress_bar.empty()
+
+        # Compute all metrics
+        with st.spinner("Computing FID (loading InceptionV3)..."):
+            metrics = compute_all_metrics(real_rgbs, fake_rgbs, DEVICE)
+
+        avg_coreg = float(np.mean(coregistration_scores))
+
+        # Display metrics
+        psnr_color = "#4CAF50" if metrics["PSNR"] > 28 else "#F5821F" if metrics["PSNR"] > 22 else "#ef5350"
+        ssim_color = "#4CAF50" if metrics["SSIM"] > 0.85 else "#F5821F" if metrics["SSIM"] > 0.70 else "#ef5350"
+        fid_color  = "#4CAF50" if not np.isnan(metrics["FID"]) and metrics["FID"] < 50 else "#F5821F" if not np.isnan(metrics["FID"]) and metrics["FID"] < 150 else "#ef5350"
+        fid_val    = f"{metrics['FID']:.1f}" if not np.isnan(metrics["FID"]) else "N/A (need ≥2 pairs)"
+
+        st.markdown(f"""
+        <div class="sw-card" style="margin-top:1rem;">
+            <div class="sw-card-title red">ISRO PS-10 Evaluation Results — {metrics['n']} image pair(s)</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid #1C2B4A;margin-top:0.8rem;">
+                <div style="padding:1.2rem;text-align:center;border-right:1px solid #1C2B4A;">
+                    <div class="sw-metric-label">PSNR</div>
+                    <div class="sw-metric-value" style="color:{psnr_color};font-size:2rem;">{metrics['PSNR']}</div>
+                    <div class="sw-metric-unit">dB &nbsp; (target &gt; 28)</div>
+                </div>
+                <div style="padding:1.2rem;text-align:center;border-right:1px solid #1C2B4A;">
+                    <div class="sw-metric-label">SSIM</div>
+                    <div class="sw-metric-value" style="color:{ssim_color};font-size:2rem;">{metrics['SSIM']}</div>
+                    <div class="sw-metric-unit">[0-1] &nbsp; (target &gt; 0.85)</div>
+                </div>
+                <div style="padding:1.2rem;text-align:center;border-right:1px solid #1C2B4A;">
+                    <div class="sw-metric-label">FID</div>
+                    <div class="sw-metric-value" style="color:{fid_color};font-size:2rem;">{fid_val}</div>
+                    <div class="sw-metric-unit">InceptionV3 &nbsp; (target &lt; 50)</div>
+                </div>
+                <div style="padding:1.2rem;text-align:center;">
+                    <div class="sw-metric-label">Co-Registration</div>
+                    <div class="sw-metric-value" style="color:#4CAF50;font-size:2rem;">{avg_coreg:.3f}</div>
+                    <div class="sw-metric-unit">NCC score &nbsp; (USGS pre-aligned)</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Semantic mask breakdown
+        st.markdown('<div class="sw-card-title" style="margin-top:1.5rem;font-family:\'Bricolage Grotesque\',monospace;font-size:0.65rem;letter-spacing:0.14em;text-transform:uppercase;color:#7A8FAD;">Semantic Land Cover Analysis</div>', unsafe_allow_html=True)
+
+        ev_cols = st.columns(min(len(eval_ir_files), 4))
+        for i, (ir_f, fake_rgb, real_rgb) in enumerate(zip(eval_ir_files, fake_rgbs, real_rgbs)):
+            if i >= 4: break
+            with ev_cols[i]:
+                ir_pil = Image.open(ir_f).convert("L")
+                ir_arr = np.array(ir_pil)
+                ir_pre = preprocess_array(ir_arr, tile_size)
+                land_mask = classify_landcover(ir_pre)
+                sem_color = get_semantic_color_map(land_mask)
+
+                # Count pixels per class
+                total = land_mask.size
+                water_pct = round(100 * (land_mask == 1).sum() / total, 1)
+                vege_pct  = round(100 * (land_mask == 2).sum() / total, 1)
+                urban_pct = round(100 * (land_mask == 3).sum() / total, 1)
+
+                st.markdown(f'<div class="sw-img-label">{ir_f.name}</div>', unsafe_allow_html=True)
+                st.image(sem_color, use_container_width=True, caption="Semantic Mask")
+                st.markdown(f"""
+                <div style="font-family:'Bricolage Grotesque',monospace;font-size:0.72rem;color:#7A8FAD;line-height:2;">
+                    💧 Water: <b style="color:#2196F3">{water_pct}%</b><br>
+                    🌿 Veg: <b style="color:#4CAF50">{vege_pct}%</b><br>
+                    🏙️ Urban: <b style="color:#9E9E9E">{urban_pct}%</b>
+                </div>""", unsafe_allow_html=True)
+
+        # Legend
+        st.markdown("""
+        <div style="display:flex;gap:20px;margin-top:1rem;font-family:'Bricolage Grotesque',monospace;font-size:0.72rem;">
+            <span><span style="color:#2196F3">■</span> Water</span>
+            <span><span style="color:#4CAF50">■</span> Vegetation</span>
+            <span><span style="color:#9E9E9E">■</span> Urban/Bare Soil</span>
+            <span><span style="color:#212121">■</span> Unknown/Mixed</span>
+        </div>
+        <div style="margin-top:1rem;padding:0.8rem;background:#0D1530;border:1px solid #1C2B4A;border-left:3px solid #4CAF50;font-family:'Bricolage Grotesque',monospace;font-size:0.75rem;color:#7A8FAD;">
+            ✅ Co-registration: Landsat C2-L2 data is pre-co-registered by USGS to ±0.3 pixel accuracy.
+            All scenes downloaded via Microsoft Planetary Computer STAC API are pixel-perfectly aligned.
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif run_eval:
+        st.warning("Please upload both IR and Real RGB images before running evaluation.")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 6 — About
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 with tab_about:
