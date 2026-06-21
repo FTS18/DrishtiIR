@@ -610,7 +610,12 @@ with tab_live:
         
         try:
             with st.spinner("Querying STAC API & downloading thermal data..."):
-                ir_data, scene_id = fetch_single_coordinate(lat, lon, crop_size=tile_size)
+                # Load model first to check input channels
+                gen = load_model()
+                in_channels = gen.enc1.block[0].weight.shape[1]
+                multi_band = (in_channels == 3)
+                
+                ir_data, scene_id = fetch_single_coordinate(lat, lon, crop_size=tile_size, multi_band=multi_band)
             
             with st.spinner("Running Pix2Pix GAN..."):
                 gen = load_model()

@@ -16,3 +16,5 @@ streamlit-folium
 folium
 pystac-client
 planetary-computer
+diffusers>=0.25.0
+accelerate>=0.26.0

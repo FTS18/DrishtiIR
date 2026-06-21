@@ -79,37 +79,50 @@ class LandsatIRDataset(Dataset):
             f"IR and RGB file counts do not match: {len(self.ir_files)} vs {len(self.rgb_files)}"
         )
         self.tile_size = tile_size
+        self.transform = None
 
     def __len__(self) -> int:
         return len(self.ir_files)
 
-    def __getitem__(self, idx: int):
-        # Read and upscale IR thermal band
-        with rasterio.open(self.ir_files[idx]) as src:
-            ir_band = src.read(
-                1,
-                out_shape=(self.tile_size, self.tile_size),
-                resampling=Resampling.bilinear,
-            )
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        ir_path = self.ir_files[idx]
+        rgb_path = self.rgb_files[idx]
 
-        # Read RGB bands (stacked as separate bands in single file)
-        with rasterio.open(self.rgb_files[idx]) as src:
-            rgb_bands = src.read(
-                [1, 2, 3],
-                out_shape=(3, self.tile_size, self.tile_size),
-                resampling=Resampling.bilinear,
-            )
+        with rasterio.open(ir_path) as src:
+            ir_arr = src.read().astype(np.float32) # Shape: (C, H, W)
+        with rasterio.open(rgb_path) as src:
+            rgb_arr = src.read().astype(np.float32) # Shape: (3, H, W)
 
-        ir_norm = normalize(ir_band, IR_DN_MIN, IR_DN_MAX)[np.newaxis, :, :]  # (1, H, W)
-        rgb_norm = np.stack(
-            [normalize(rgb_bands[i], RGB_DN_MIN, RGB_DN_MAX) for i in range(3)],
-            axis=0,
-        )  # (3, H, W)
+        # Handle IR arrays (either 1 channel or 3 channel)
+        if ir_arr.shape[0] == 1:
+            ir_arr = np.clip(ir_arr, IR_DN_MIN, IR_DN_MAX)
+            ir_arr = (ir_arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
+            ir_arr = ir_arr * 2.0 - 1.0
+        elif ir_arr.shape[0] >= 3:
+            # Multi-band: B10, B6, B5
+            # Apply normalizations per band. For now, clip and scale globally or per band.
+            ir_arr = np.clip(ir_arr, 0.0, 65535.0)
+            ir_arr = (ir_arr / 65535.0) * 2.0 - 1.0
 
-        return (
-            torch.tensor(ir_norm, dtype=torch.float32),
-            torch.tensor(rgb_norm, dtype=torch.float32),
-        )
+        # Handle RGB arrays
+        if rgb_arr.max() > 255.0:
+            rgb_arr = np.clip(rgb_arr, VIS_DN_MIN, VIS_DN_MAX)
+            rgb_arr = (rgb_arr - VIS_DN_MIN) / (VIS_DN_MAX - VIS_DN_MIN)
+        elif rgb_arr.max() > 1.0:
+            rgb_arr = rgb_arr / 255.0
+
+        rgb_arr = rgb_arr * 2.0 - 1.0
+
+        ir_tensor = torch.from_numpy(ir_arr)
+        rgb_tensor = torch.from_numpy(rgb_arr)
+
+        if self.transform:
+            stacked = torch.cat([ir_tensor, rgb_tensor], dim=0)
+            stacked = self.transform(stacked)
+            ir_ch = ir_arr.shape[0]
+            ir_tensor, rgb_tensor = stacked[:ir_ch, ...], stacked[ir_ch:, ...]
+
+        return ir_tensor, rgb_tensor
 
 
 # ─── Synthetic Demo Dataset ───────────────────────────────────────────────────

@@ -58,17 +58,61 @@ DEFAULTS = {
 
 # ─── Loss Functions ───────────────────────────────────────────────────────────
 
+class VGGPerceptualLoss(nn.Module):
+    def __init__(self, resize=True):
+        super(VGGPerceptualLoss, self).__init__()
+        import torchvision.models as models
+        blocks = []
+        # Load pre-trained VGG16
+        vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1).features
+        # We extract features up to relu2_2 (layer index 9)
+        blocks.append(vgg[:4].eval())
+        blocks.append(vgg[4:9].eval())
+        for bl in blocks:
+            for p in bl.parameters():
+                p.requires_grad = False
+        self.blocks = nn.ModuleList(blocks)
+        self.transform = nn.functional.interpolate
+        self.resize = resize
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, input, target):
+        if input.shape[1] != 3:
+            input = input.repeat(1, 3, 1, 1)
+            target = target.repeat(1, 3, 1, 1)
+        # Assuming input/target are in [-1, 1], normalize to [0, 1] then subtract ImageNet mean
+        input = (input + 1) / 2
+        target = (target + 1) / 2
+        input = (input - self.mean) / self.std
+        target = (target - self.mean) / self.std
+        
+        if self.resize:
+            input = self.transform(input, mode='bilinear', size=(224, 224), align_corners=False)
+            target = self.transform(target, mode='bilinear', size=(224, 224), align_corners=False)
+            
+        loss = 0.0
+        x = input
+        y = target
+        for block in self.blocks:
+            x = block(x)
+            y = block(y)
+            loss += nn.functional.l1_loss(x, y)
+        return loss
+
 class GeneratorLoss(nn.Module):
     """
     Combined generator objective:
-      Adversarial (fool discriminator) + L1 (pixel fidelity) + SSIM (structural)
+      Adversarial (fool discriminator) + L1 (pixel fidelity) + SSIM (structural) + VGG (Perceptual)
     """
-    def __init__(self, l1_lambda: float = 100.0, ssim_lambda: float = 20.0):
+    def __init__(self, l1_lambda: float = 100.0, ssim_lambda: float = 20.0, vgg_lambda: float = 10.0):
         super().__init__()
         self.l1_lambda   = l1_lambda
         self.ssim_lambda = ssim_lambda
+        self.vgg_lambda  = vgg_lambda
         self.bce  = nn.BCEWithLogitsLoss()
         self.l1   = nn.L1Loss()
+        self.vgg  = VGGPerceptualLoss()
 
     def forward(
         self,
@@ -78,6 +122,8 @@ class GeneratorLoss(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, float]]:
         loss_adv = self.bce(disc_fake_pred, torch.ones_like(disc_fake_pred))
         loss_l1  = self.l1(fake_rgb, real_rgb) * self.l1_lambda
+        
+        loss_vgg = self.vgg(fake_rgb, real_rgb) * self.vgg_lambda
 
         loss_ssim = torch.tensor(0.0, device=fake_rgb.device)
         if SSIM_AVAILABLE:
@@ -86,11 +132,12 @@ class GeneratorLoss(nn.Module):
             real_01 = (real_rgb + 1.0) / 2.0
             loss_ssim = (1.0 - compute_ssim(fake_01, real_01, data_range=1.0)) * self.ssim_lambda
 
-        total = loss_adv + loss_l1 + loss_ssim
+        total = loss_adv + loss_l1 + loss_ssim + loss_vgg
         breakdown = {
             "G_adv":  loss_adv.item(),
             "G_L1":   loss_l1.item(),
             "G_SSIM": loss_ssim.item(),
+            "G_VGG":  loss_vgg.item(),
             "G_total": total.item(),
         }
         return total, breakdown
@@ -160,7 +207,13 @@ def save_sample_images(
         fake_rgb   = gen(ir_sample)
 
     # Denormalize all images from [-1, 1] → [0, 255]
-    ir_display   = denormalize(ir_sample[0, 0].cpu().numpy())
+    
+    # If IR has 3 channels, display just the first (Thermal)
+    if ir_sample.shape[1] >= 3:
+        ir_display = denormalize(ir_sample[0, 0].cpu().numpy())
+    else:
+        ir_display = denormalize(ir_sample[0, 0].cpu().numpy())
+        
     fake_display = denormalize(fake_rgb[0].permute(1, 2, 0).cpu().numpy())
     real_display = denormalize(rgb_sample[0].permute(1, 2, 0).cpu().numpy())
 
@@ -181,9 +234,26 @@ def train(args) -> None:
     print(f"Training on: {device.upper()}")
     print(f"SSIM loss available: {SSIM_AVAILABLE}")
 
+    # Data
+    use_synthetic = not (args.ir_dir and os.path.isdir(args.ir_dir))
+    if use_synthetic:
+        print("[WARN] No valid --ir-dir provided. Training on SYNTHETIC data.")
+
+    loader = get_dataloader(
+        ir_dir=args.ir_dir if not use_synthetic else None,
+        rgb_dir=args.rgb_dir if not use_synthetic else None,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        synthetic=use_synthetic,
+    )
+    
+    sample_ir, _ = next(iter(loader))
+    in_channels = sample_ir.shape[1]
+    print(f"Detected in_channels: {in_channels}")
+
     # Models
-    gen  = Generator().to(device)
-    disc = Discriminator().to(device)
+    gen  = Generator(in_channels=in_channels).to(device)
+    disc = Discriminator(in_channels=in_channels).to(device)
 
     # Resume if checkpoint exists
     start_epoch = load_latest_checkpoint(gen, disc, args.checkpoint_dir, device)
@@ -198,19 +268,6 @@ def train(args) -> None:
     # Losses
     gen_loss_fn  = GeneratorLoss(l1_lambda=args.l1_lambda, ssim_lambda=args.ssim_lambda)
     disc_loss_fn = DiscriminatorLoss()
-
-    # Data
-    use_synthetic = not (args.ir_dir and os.path.isdir(args.ir_dir))
-    if use_synthetic:
-        print("[WARN] No valid --ir-dir provided. Training on SYNTHETIC data.")
-
-    loader = get_dataloader(
-        ir_dir=args.ir_dir if not use_synthetic else None,
-        rgb_dir=args.rgb_dir if not use_synthetic else None,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        synthetic=use_synthetic,
-    )
 
     print(f"Dataset size : {len(loader.dataset)} samples")
     print(f"Batch size   : {args.batch_size}")

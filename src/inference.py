@@ -39,13 +39,17 @@ except ImportError:
 
 def load_generator(checkpoint_path: str, device: str = "cpu") -> Generator:
     """Load a trained Generator from a .pth checkpoint file."""
-    gen = Generator()
-    if os.path.exists(checkpoint_path):
-        gen.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        print(f"[Inference] Loaded checkpoint: {checkpoint_path}")
-    else:
+    if not os.path.exists(checkpoint_path):
         print(f"[Inference] WARNING: Checkpoint not found at '{checkpoint_path}'.")
         print("[Inference] Using randomly initialized weights for demo purposes.")
+        gen = Generator()
+    else:
+        state_dict = torch.load(checkpoint_path, map_location=device)
+        # The first conv layer weight shape is (out_channels, in_channels, k, k)
+        in_channels = state_dict['enc1.block.0.weight'].shape[1]
+        gen = Generator(in_channels=in_channels)
+        gen.load_state_dict(state_dict)
+        print(f"[Inference] Loaded checkpoint: {checkpoint_path}")
     gen.to(device)
     gen.eval()
     return gen
@@ -83,32 +87,38 @@ def preprocess_png(path: str, tile_size: int = TILE_SIZE) -> np.ndarray:
 
 def preprocess_array(arr: np.ndarray, tile_size: int = TILE_SIZE) -> np.ndarray:
     """
-    Accepts a raw 2D numpy array (e.g., from Streamlit uploaded bytes).
-    If it's a massive full scene, we take a center crop to preserve the spatial
-    scale (100m/pixel) the model was trained on.
+    Accepts a raw 2D numpy array (H, W) or 3D numpy array (C, H, W).
     """
-    if arr.ndim == 3:
-        arr = arr[:, :, 0]   # Take first channel if multi-channel
+    # If passed as (H, W), expand to (1, H, W)
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, :, :]
         
-    h, w = arr.shape
+    c, h, w = arr.shape
     if h > tile_size and w > tile_size:
         # It's a huge raw scene. Take a center crop to preserve scale.
         cy, cx = h // 2, w // 2
         half = tile_size // 2
-        arr = arr[cy - half : cy + half, cx - half : cx + half].astype(np.float32)
+        arr = arr[:, cy - half : cy + half, cx - half : cx + half].astype(np.float32)
     else:
-        # It's already a patch, just resize to ensure exact dimensions
-        arr = cv2.resize(arr, (tile_size, tile_size)).astype(np.float32)
+        # Resize each channel
+        resized = []
+        for i in range(c):
+            resized.append(cv2.resize(arr[i], (tile_size, tile_size)))
+        arr = np.stack(resized).astype(np.float32)
     
     # Check if this is a 16-bit Landsat thermal image
     if arr.max() > 255.0:
-        arr = np.clip(arr, IR_DN_MIN, IR_DN_MAX)
-        arr = (arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
+        if c == 1:
+            arr = np.clip(arr, IR_DN_MIN, IR_DN_MAX)
+            arr = (arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
+        else:
+            arr = np.clip(arr, 0.0, 65535.0)
+            arr = arr / 65535.0
     elif arr.max() > 1.0:
         arr = arr / 255.0
         
     arr = arr * 2.0 - 1.0
-    return arr[np.newaxis, :, :]   # (1, H, W)
+    return arr
 
 
 # ─── Core Inference ───────────────────────────────────────────────────────────
