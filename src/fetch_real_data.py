@@ -109,8 +109,13 @@ def fetch_single_coordinate(lat, lon, crop_size=256):
     item = items[0]
     
     with rasterio.open(item.assets["lwir11"].href) as src:
-        # Get pixel coordinates for lat/lon
-        py, px = src.index(lon, lat)
+        from rasterio.warp import transform
+        
+        # Project Lat/Lon (EPSG:4326) into the TIF's specific UTM CRS
+        xs, ys = transform("EPSG:4326", src.crs, [lon], [lat])
+        
+        # Get exact pixel coordinates for the projected UTM coordinates
+        py, px = src.index(xs[0], ys[0])
         w, h = src.width, src.height
         
         # Ensure we don't go out of bounds
