@@ -167,10 +167,16 @@ def save_sample_images(
 
 # ─── Training Loop ────────────────────────────────────────────────────────────
 
+from accelerate import Accelerator
+
 def train(args):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.grad_accum,
+        mixed_precision="fp16"
+    )
+    device = accelerator.device
     print(f"\n{'='*60}")
-    print(f"  DrishtiIR Diffusion Training  |  Device: {device.upper()}")
+    print(f"  DrishtiIR Diffusion Training  |  Device: {device}")
     print(f"{'='*60}\n")
 
     # ── Progressive Resolution [Technique #14] ────────────────────────────────
@@ -236,7 +242,13 @@ def train(args):
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     lr_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
-    scaler = torch.amp.GradScaler("cuda") if device == "cuda" else None
+    
+    # Prepare everything via Accelerator
+    model, optimizer, loader_128, loader_256, lr_scheduler = accelerator.prepare(
+        model, optimizer, loader_128, loader_256, lr_scheduler
+    )
+    if val_loader is not None:
+        val_loader = accelerator.prepare(val_loader)
 
     # ── Training Loop ─────────────────────────────────────────────────────────
     for epoch in range(start_epoch, total_epochs + 1):
@@ -281,48 +293,35 @@ def train(args):
             ).long()
             noisy_rgb = noise_scheduler.add_noise(rgb_batch, noise, timesteps)
 
-            # ── Forward (Mixed Precision AMP) ─────────────────────────────────
-            if scaler:
-                with torch.amp.autocast("cuda"):
-                    noise_pred = model(noisy_rgb, ir_cond, timesteps)
-
-                    # MSE loss (primary)
-                    loss_mse = F.mse_loss(noise_pred, noise)
-
-                    # Fourier Feature loss [Technique #10]
-                    loss_fft = fourier_feature_loss(noise_pred, noise)
-
-                    # Semantic Consistency Loss — water→blue, vegetation→green
-                    # Reconstruct approximate clean RGB from predicted noise for semantic check
-                    loss_sem = spectral_semantic_loss(noise_pred, ir_batch, device)
-
-                    # Combined weighted loss
-                    loss = loss_mse + 0.1 * loss_fft + 0.05 * loss_sem
-                    loss = loss / args.grad_accum
-
-                scaler.scale(loss).backward()
-                if ((step + 1) % args.grad_accum == 0) or ((step + 1) == len(loader)):
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-                    # Update EMA weights [Technique #4]
-                    ema.update(model)
-            else:
+            # ── Forward & Backward via Accelerate ─────────────────────────────
+            with accelerator.accumulate(model):
                 noise_pred = model(noisy_rgb, ir_cond, timesteps)
-                loss_mse = F.mse_loss(noise_pred, noise)
-                loss_fft = fourier_feature_loss(noise_pred, noise)
-                loss_sem = spectral_semantic_loss(noise_pred, ir_batch, device)
-                loss = (loss_mse + 0.1 * loss_fft + 0.05 * loss_sem) / args.grad_accum
-                loss.backward()
-                if ((step + 1) % args.grad_accum == 0) or ((step + 1) == len(loader)):
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    ema.update(model)
 
-            display_loss = loss.item() * args.grad_accum
+                # MSE loss (primary)
+                loss_mse = F.mse_loss(noise_pred, noise)
+
+                # Fourier Feature loss [Technique #10]
+                loss_fft = fourier_feature_loss(noise_pred, noise)
+
+                # Semantic Consistency Loss — water→blue, vegetation→green
+                loss_sem = spectral_semantic_loss(noise_pred, ir_batch, device)
+
+                # Combined weighted loss
+                loss = loss_mse + 0.1 * loss_fft + 0.05 * loss_sem
+
+                accelerator.backward(loss)
+
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), 1.0)
+
+                optimizer.step()
+                optimizer.zero_grad()
+
+                if accelerator.sync_gradients:
+                    # Update EMA weights [Technique #4]
+                    ema.update(accelerator.unwrap_model(model))
+
+            display_loss = loss.item()
             total_loss  += display_loss
             pbar.set_postfix(loss=f"{display_loss:.4f}")
 
@@ -332,7 +331,7 @@ def train(args):
         print(f"Epoch {epoch:03d} | Loss: {avg_loss:.4f} | LR: {lr_scheduler.get_last_lr()[0]:.2e}")
 
         if epoch % args.save_every == 0:
-            save_checkpoint(epoch, model, ema, args.checkpoint_dir)
+            save_checkpoint(epoch, accelerator.unwrap_model(model), ema, args.checkpoint_dir)
             # ── Validation Pass ──────────────────────────────────────────────
             if val_loader is not None:
                 model.eval()
@@ -364,7 +363,7 @@ def train(args):
             )
 
     # Save final checkpoint
-    save_checkpoint(total_epochs, model, ema, args.checkpoint_dir)
+    save_checkpoint(total_epochs, accelerator.unwrap_model(model), ema, args.checkpoint_dir)
     print(f"\n  Training complete! Final EMA weights saved to: {args.checkpoint_dir}/diffusion_ema_latest.pth")
 
 
