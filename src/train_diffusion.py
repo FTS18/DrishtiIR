@@ -278,8 +278,19 @@ def train(args):
             with accelerator.accumulate(model):
                 noise_pred = model(noisy_rgb, ir_cond, timesteps, is_unconditional=is_uncond)
 
-                # Pure MSE noise prediction loss — stable and proven
-                loss = F.mse_loss(noise_pred, noise)
+                # 1. Pure MSE noise prediction loss — stable and proven
+                noise_loss = F.mse_loss(noise_pred, noise)
+
+                # 2. Explicit Color Alignment Loss (L1 on predicted x0)
+                # Recover x0 estimate from predicted noise to penalize color drift
+                alphas_cumprod = noise_scheduler.alphas_cumprod.to(device)
+                alpha_t = alphas_cumprod[timesteps].view(-1, 1, 1, 1)
+                
+                pred_x0 = (noisy_rgb - torch.sqrt(1 - alpha_t) * noise_pred) / torch.sqrt(alpha_t)
+                color_loss = F.l1_loss(pred_x0, rgb_batch)
+
+                # Combine: noise_loss for high freq structure, color_loss for global tint
+                loss = noise_loss + (0.5 * color_loss)
 
                 accelerator.backward(loss)
 

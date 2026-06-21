@@ -364,7 +364,8 @@ def train(args):
             rgb_batch = rgb_batch.to(device, non_blocking=True)
 
             # Spectral augmentation on IR bands
-            ir_batch = spectral_augment(ir_batch)
+            # Disabled to prevent mode collapse on highly diverse global dataset
+            # ir_batch = spectral_augment(ir_batch)
 
             # ── Discriminator Step ────────────────────────────────────────
             with autocast(dtype=torch.bfloat16):
@@ -456,7 +457,7 @@ if __name__ == "__main__":
     # Separate LRs for G and D (standard practice for stable GAN training)
     parser.add_argument("--lr-g",           type=float, default=2e-4,  help="Generator LR")
     parser.add_argument("--lr-d",           type=float, default=1e-4,  help="Discriminator LR (lower = D trains slower = more stable)")
-    parser.add_argument("--l1-lambda",      type=float, default=100.0)
+    parser.add_argument("--l1-lambda",      type=float, default=300.0)
     parser.add_argument("--ssim-lambda",    type=float, default=20.0)
     parser.add_argument("--vgg-lambda",     type=float, default=10.0)
     parser.add_argument("--save-every",     type=int,   default=10)
