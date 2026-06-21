@@ -1,0 +1,47 @@
+# Large data files
+data/
+*.tif
+*.TIF
+*.tiff
+*.TIFF
+
+# Model checkpoints (too large for GitHub)
+checkpoints/
+*.pth
+*.pt
+
+# Training samples output
+samples/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Scratch / temp scripts
+fix_fonts.py
+remove_emojis.py
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
