@@ -26,15 +26,15 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
         modifier=planetary_computer.sign_inplace,
     )
     
-    # Large bounding box (e.g. all of India)
-    bbox = [68.1, 8.0, 97.4, 37.1]
+    # Smaller bounding box (Central India region) to prevent API timeouts
+    bbox = [77.0, 20.0, 79.0, 22.0]
     
-    print(f"Searching for up to {num_scenes} cloud-free (<2%) Landsat 8/9 scenes...")
+    print(f"Searching for up to {num_scenes} low-cloud (<5%) Landsat 8/9 scenes...")
     search = catalog.search(
         collections=["landsat-c2-l2"],
         bbox=bbox,
-        datetime="2022-01-01/2023-12-31",
-        query={"eo:cloud_cover": {"lt": 2}}, 
+        datetime="2023-01-01/2023-12-31",
+        query={"eo:cloud_cover": {"lt": 5}}, 
         max_items=num_scenes
     )
     
