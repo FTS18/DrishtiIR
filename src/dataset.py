@@ -130,73 +130,18 @@ class LandsatIRDataset(Dataset):
         return ir_tensor, rgb_tensor
 
 
-# ─── Synthetic Demo Dataset ───────────────────────────────────────────────────
-
-class SyntheticIRDataset(Dataset):
-    """
-    Procedurally generates paired IR / RGB tiles for demo/testing.
-
-    Simulates:
-    - Dark thermal "blobs" (buildings / warm surfaces)
-    - Gradient backgrounds (sky / terrain temperature gradients)
-    - Random thermal noise
-    """
-
-    def __init__(self, num_samples: int = 200, tile_size: int = TILE_SIZE, seed: int = 42):
-        self.num_samples = num_samples
-        self.tile_size = tile_size
-        self.rng = np.random.default_rng(seed)
-
-    def __len__(self) -> int:
-        return self.num_samples
-
-    def __getitem__(self, idx: int):
-        H = W = self.tile_size
-
-        # Build a synthetic thermal "scene"
-        background = self.rng.uniform(0.1, 0.4, (H, W)).astype(np.float32)
-
-        # Add 2-5 warm "blobs" (thermal signatures of objects)
-        num_blobs = self.rng.integers(2, 6)
-        for _ in range(num_blobs):
-            cx = self.rng.integers(20, W - 20)
-            cy = self.rng.integers(20, H - 20)
-            radius = self.rng.integers(10, 40)
-            intensity = self.rng.uniform(0.5, 1.0)
-            y_coords, x_coords = np.ogrid[:H, :W]
-            mask = (x_coords - cx) ** 2 + (y_coords - cy) ** 2 <= radius ** 2
-            background[mask] = np.maximum(background[mask], intensity)
-
-        # Normalize IR to [-1, 1]
-        ir = background * 2.0 - 1.0
-        ir_tensor = torch.tensor(ir[np.newaxis, :, :], dtype=torch.float32)
-
-        # Create a plausible RGB from the thermal map
-        # Warm blobs → orange/red hues; cool areas → deep blue/teal
-        r = np.clip(background * 1.8, 0, 1)
-        g = np.clip(background * 0.6, 0, 1)
-        b = np.clip((1.0 - background) * 1.2, 0, 1)
-        rgb = np.stack([r, g, b], axis=0).astype(np.float32)
-        rgb = rgb * 2.0 - 1.0  # Normalize to [-1, 1]
-        rgb_tensor = torch.tensor(rgb, dtype=torch.float32)
-
-        return ir_tensor, rgb_tensor
-
-
 # ─── Factory ──────────────────────────────────────────────────────────────────
 
 def get_dataloader(
-    ir_dir: str | None = None,
-    rgb_dir: str | None = None,
+    ir_dir: str,
+    rgb_dir: str,
     batch_size: int = 8,
     num_workers: int = 2,
-    synthetic: bool = False,
-    num_synthetic: int = 200,
     tile_size: int = TILE_SIZE,
     val_split: float = 0.0,
 ) -> "DataLoader | tuple[DataLoader, DataLoader | None]":
     """
-    Returns a DataLoader for either real GeoTIFF data or synthetic demo data.
+    Returns a DataLoader for real GeoTIFF data.
 
     tile_size  : controls resolution (128 for Phase 1, 256 for Phase 2 progressive training).
     val_split  : fraction of data to hold out for validation (0.0 = no split, returns single loader).
@@ -204,12 +149,12 @@ def get_dataloader(
     """
     from torch.utils.data import random_split
 
-    use_synthetic = synthetic or (ir_dir is None) or (not os.path.isdir(str(ir_dir)))
+    if not ir_dir or not os.path.isdir(ir_dir):
+        raise ValueError(f"IR directory not found: {ir_dir}")
+    if not rgb_dir or not os.path.isdir(rgb_dir):
+        raise ValueError(f"RGB directory not found: {rgb_dir}")
 
-    if use_synthetic:
-        full_dataset = SyntheticIRDataset(num_samples=num_synthetic, tile_size=tile_size)
-    else:
-        full_dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size)
+    full_dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size)
 
     if val_split > 0.0:
         n_val   = max(1, int(len(full_dataset) * val_split))
@@ -239,12 +184,3 @@ def get_dataloader(
 
 
 
-if __name__ == "__main__":
-    print("Testing SyntheticIRDataset...")
-    loader = get_dataloader(synthetic=True, batch_size=4, num_workers=0)
-    ir_batch, rgb_batch = next(iter(loader))
-    print(f"IR batch shape : {ir_batch.shape}")   # (4, 1, 256, 256)
-    print(f"RGB batch shape: {rgb_batch.shape}")  # (4, 3, 256, 256)
-    print(f"IR  value range: [{ir_batch.min():.2f}, {ir_batch.max():.2f}]")
-    print(f"RGB value range: [{rgb_batch.min():.2f}, {rgb_batch.max():.2f}]")
-    print("Dataset test PASSED.")

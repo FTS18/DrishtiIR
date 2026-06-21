@@ -187,23 +187,20 @@ def train(args):
     phase2_start = phase1_epochs + 1
 
     # Phase 1 loader at 128x128
-    use_synthetic = not (args.ir_dir and os.path.isdir(args.ir_dir))
     loader_128 = get_dataloader(
-        ir_dir=args.ir_dir if not use_synthetic else None,
-        rgb_dir=args.rgb_dir if not use_synthetic else None,
+        ir_dir=args.ir_dir,
+        rgb_dir=args.rgb_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        synthetic=use_synthetic,
         tile_size=128,
         val_split=0.0,  # No val split for phase 1 (speed)
     )
     # Phase 2 loader at 256x256 — with 10% validation split
     loader_256, val_loader = get_dataloader(
-        ir_dir=args.ir_dir if not use_synthetic else None,
-        rgb_dir=args.rgb_dir if not use_synthetic else None,
+        ir_dir=args.ir_dir,
+        rgb_dir=args.rgb_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        synthetic=use_synthetic,
         tile_size=256,
         val_split=0.10,
     )
