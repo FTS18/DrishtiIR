@@ -1,96 +1,169 @@
 import os
-import rasterio
-from rasterio.windows import Window
-import numpy as np
 import time
+import requests
+import tarfile
+import rasterio
+import numpy as np
+import shutil
 
-def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train_massive'):
-    """
-    Massive fetcher designed for Kaggle.
-    Downloads 3-channel input: B10 (Thermal), B6 (SWIR), B5 (NIR).
-    Downloads 3-channel target: B4 (Red), B3 (Green), B2 (Blue).
-    """
-    try:
-        import pystac_client
-        import planetary_computer
-    except ImportError:
-        print("Please install: pip install pystac-client planetary-computer")
-        return
+USERNAME = "ananay"
+APP_TOKEN = "Mr7bzqayU4n7AaNFDaMRsJY0lKpnQ53Aap523URz7Me7xVZKrX16YbT7w8L6utZF"
+M2M_API = "https://m2m.cr.usgs.gov/api/api/json/v1.5"
 
+def send_request(endpoint, data=None, api_key=None):
+    if data is None: data = {}
+    headers = {}
+    if api_key: headers['X-Auth-Token'] = api_key
+    resp = requests.post(f"{M2M_API}/{endpoint}", json=data, headers=headers)
+    if resp.status_code != 200:
+        raise Exception(f"API Error: {resp.text}")
+    res = resp.json()
+    if res.get('errorCode'):
+        raise Exception(f"M2M Error {res.get('errorCode')}: {res.get('errorMessage')}")
+    return res['data']
+
+def fetch_massive_dataset(num_scenes=50, crop_size=512, output_dir='data/train_massive'):
     os.makedirs(f'{output_dir}/ir_multiband', exist_ok=True)
     os.makedirs(f'{output_dir}/rgb', exist_ok=True)
+    tmp_dir = f'{output_dir}/tmp'
+    os.makedirs(tmp_dir, exist_ok=True)
     
-    print("Connecting to Microsoft Planetary Computer...")
-    catalog = pystac_client.Client.open(
-        "https://planetarycomputer.microsoft.com/api/stac/v1",
-        modifier=planetary_computer.sign_inplace,
-    )
+    print("Logging into USGS M2M API...")
+    try:
+        api_key = send_request("login-token", {"username": USERNAME, "token": APP_TOKEN})
+        print("Authenticated successfully.")
+    except Exception as e:
+        print(f"Login failed: {e}")
+        return
     
-    print(f"Applying strict limits to bypass API timeout...")
-    search = catalog.search(
-        collections=["landsat-c2-l2"],
-        bbox=[77.0, 28.0, 78.0, 29.0], # Very small region
-        datetime="2023-01-01/2023-12-31",
-        query={"eo:cloud_cover": {"lt": 5}},
-        limit=50, # Forces the API to stop scanning early
-        max_items=num_scenes
-    )
+    dataset_name = "landsat_ot_c2_l2"
     
-    items = list(search.items())
-    print(f"Found {len(items)} pristine low-cloud scenes.")
+    print("Searching for Landsat 8/9 Collection 2 Level 2 scenes...")
+    search_payload = {
+        "datasetName": dataset_name,
+        "maxResults": num_scenes,
+        "sceneFilter": {
+            "spatialFilter": {
+                "filterType": "mbr",
+                "lowerLeft": {"latitude": 28.0, "longitude": 77.0},
+                "upperRight": {"latitude": 29.0, "longitude": 78.0}
+            },
+            "cloudCoverFilter": {"max": 5, "min": 0, "includeUnknown": False}
+        }
+    }
+    scenes_data = send_request("scene-search", search_payload, api_key)
+    results = scenes_data.get('results', [])
+    print(f"Found {len(results)} cloud-free scenes in the Delhi region.")
     
+    entity_ids = [r['entityId'] for r in results]
+    if not entity_ids: return
+    
+    # Get download options
+    print("Checking availability on USGS servers...")
+    options_payload = {
+        "datasetName": dataset_name,
+        "entityIds": entity_ids
+    }
+    options_data = send_request("download-options", options_payload, api_key)
+    
+    downloads = []
+    for opt in options_data:
+        # We need the full product bundle for C2 L2
+        if opt['available'] and 'Bundle' in opt['productName']:
+            downloads.append({"entityId": opt['entityId'], "productId": opt['id']})
+    
+    if not downloads:
+        print("No immediate downloads available without ordering.")
+        return
+        
+    print(f"Requesting {len(downloads)} direct download URLs...")
+    dl_request = {
+        "downloads": downloads,
+        "label": "hackathon_dl"
+    }
+    dl_data = send_request("download-request", dl_request, api_key)
+    
+    urls = [dl['url'] for dl in dl_data['availableDownloads']]
+    
+    print("Starting processing pipeline...")
     success_count = 0
-    for i, item in enumerate(items):
-        scene_id = item.id
-        print(f"\n[{i+1}/{len(items)}] Downloading: {scene_id}")
+    
+    for i, (entity_id, url) in enumerate(zip([d['entityId'] for d in downloads], urls)):
+        print(f"\n[{i+1}/{len(downloads)}] Processing {entity_id}...")
+        tar_path = os.path.join(tmp_dir, f"{entity_id}.tar")
         
+        # 1. Download
+        print(f"  -> Downloading ~1GB tar bundle from USGS...")
         try:
-            # We use rasterio windowed reading to ONLY download the center patch
-            with rasterio.open(item.assets["lwir11"].href) as src:
-                w, h = src.width, src.height
-                col_off, row_off = (w - crop_size) // 2, (h - crop_size) // 2
-                window = Window(col_off, row_off, crop_size, crop_size)
-                
-                print("  -> Fetching Thermal (B10)...")
-                b10_data = src.read(1, window=window)
-                profile = src.profile
-                profile.update(width=crop_size, height=crop_size, transform=src.window_transform(window), count=3)
-                
-            print("  -> Fetching SWIR (B6)...")
-            with rasterio.open(item.assets["swir16"].href) as src:
-                b6_data = src.read(1, window=window)
-                
-            print("  -> Fetching NIR (B5)...")
-            with rasterio.open(item.assets["nir08"].href) as src:
-                b5_data = src.read(1, window=window)
-                
-            input_multiband = np.stack([b10_data, b6_data, b5_data])
-            
-            bands_rgb = []
-            for b in ["red", "green", "blue"]:
-                print(f"  -> Fetching Visible ({b.upper()})...")
-                with rasterio.open(item.assets[b].href) as src:
-                    bands_rgb.append(src.read(1, window=window))
-            
-            rgb_data = np.stack(bands_rgb)
-            
-            # Save files
-            with rasterio.open(f'{output_dir}/ir_multiband/{scene_id}.tif', 'w', **profile) as dst:
-                dst.write(input_multiband)
-                
-            with rasterio.open(f'{output_dir}/rgb/{scene_id}.tif', 'w', **profile) as dst:
-                dst.write(rgb_data)
-                
-            success_count += 1
-            print(f"  -> ✓ Saved to {output_dir}")
-            
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                with open(tar_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192*16): 
+                        f.write(chunk)
         except Exception as e:
-            print(f"  -> ✗ Error processing {scene_id}: {e}")
+            print(f"  -> Error downloading: {e}")
+            continue
+                    
+        # 2. Extract
+        print(f"  -> Extracting necessary TIF bands...")
+        band_paths = {}
+        try:
+            with tarfile.open(tar_path) as tar:
+                for member in tar.getmembers():
+                    if "B2.TIF" in member.name: band_paths['blue'] = member.name
+                    elif "B3.TIF" in member.name: band_paths['green'] = member.name
+                    elif "B4.TIF" in member.name: band_paths['red'] = member.name
+                    elif "B5.TIF" in member.name: band_paths['nir'] = member.name
+                    elif "B6.TIF" in member.name: band_paths['swir1'] = member.name
+                    elif "B7.TIF" in member.name: band_paths['swir2'] = member.name
+                    elif "B10.TIF" in member.name: band_paths['thermal'] = member.name
+                    else: continue
+                    tar.extract(member, tmp_dir)
+        except Exception as e:
+            print(f"  -> Error extracting tar: {e}")
+            if os.path.exists(tar_path): os.remove(tar_path)
+            continue
+                
+        if len(band_paths) < 7:
+            print(f"  -> Missing required bands in bundle, skipping.")
+            if os.path.exists(tar_path): os.remove(tar_path)
+            continue
             
-        time.sleep(0.5) # Avoid hammering the API
-        
+        # 3. Process into Numpy Arrays
+        print(f"  -> Cropping and converting to NumPy arrays...")
+        try:
+            arrays = {}
+            for k, p in band_paths.items():
+                full_path = os.path.join(tmp_dir, p)
+                with rasterio.open(full_path) as src:
+                    h, w = src.height, src.width
+                    cx, cy = w // 2, h // 2
+                    half = crop_size // 2
+                    window = rasterio.windows.Window(cx - half, cy - half, crop_size, crop_size)
+                    arrays[k] = src.read(1, window=window)
+                os.remove(full_path) # Cleanup TIF immediately to save disk space
+                
+            ir_stack = np.stack([arrays['nir'], arrays['swir1'], arrays['swir2'], arrays['thermal']], axis=0)
+            rgb_stack = np.stack([arrays['red'], arrays['green'], arrays['blue']], axis=0)
+            
+            np.save(f'{output_dir}/ir_multiband/{entity_id}.npy', ir_stack)
+            np.save(f'{output_dir}/rgb/{entity_id}.npy', rgb_stack)
+            success_count += 1
+            print(f"  -> Success! Cleaned up disk space.")
+        except Exception as e:
+            print(f"  -> Processing error: {e}")
+            
+        # 4. Cleanup Tar
+        if os.path.exists(tar_path): 
+            os.remove(tar_path)
+            
+    # Final cleanup
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    
+    print("Logging out of USGS M2M API...")
+    send_request("logout", {}, api_key)
+    
     print(f"\nFinished! Successfully downloaded {success_count} multi-band pairs.")
 
 if __name__ == '__main__':
-    # Reverted to exactly 50 scenes to match what successfully worked on Kaggle
     fetch_massive_dataset(num_scenes=50, crop_size=512)
