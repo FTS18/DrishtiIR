@@ -22,7 +22,10 @@ except ImportError:
 
 # ─── Conditional DDPM ─────────────────────────────────────────────────────────
 
-from src.model import SRModule
+try:
+    from src.model import SRModule
+except ImportError:
+    from model import SRModule
 
 class ConditionalDiffusionModel(nn.Module):
     """
