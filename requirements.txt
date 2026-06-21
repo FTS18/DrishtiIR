@@ -11,3 +11,8 @@ matplotlib>=3.8.0
 tqdm>=4.66.0
 scikit-image>=0.22.0
 requests>=2.31.0
+streamlit-image-comparison
+streamlit-folium
+folium
+pystac-client
+planetary-computer

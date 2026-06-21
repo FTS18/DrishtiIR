@@ -78,5 +78,49 @@ def fetch_planetary_computer_data(num_scenes=10, crop_size=512):
         except Exception as e:
             print(f"  -> ✗ Error processing {scene_id}: {e}")
 
+def fetch_single_coordinate(lat, lon, crop_size=256):
+    """
+    Fetches a single cropped thermal patch from the STAC API around a given lat/lon.
+    Returns the raw 2D numpy array and the scene ID.
+    """
+    import pystac_client
+    import planetary_computer
+    
+    catalog = pystac_client.Client.open(
+        "https://planetarycomputer.microsoft.com/api/stac/v1",
+        modifier=planetary_computer.sign_inplace,
+    )
+    
+    # Very small bounding box around the point
+    delta = 0.05
+    bbox = [lon - delta, lat - delta, lon + delta, lat + delta]
+    
+    search = catalog.search(
+        collections=["landsat-c2-l2"],
+        bbox=bbox,
+        query={"eo:cloud_cover": {"lt": 10}}, 
+        max_items=1
+    )
+    
+    items = list(search.items())
+    if not items:
+        raise ValueError(f"No cloud-free Landsat data found for ({lat}, {lon})")
+        
+    item = items[0]
+    
+    with rasterio.open(item.assets["lwir11"].href) as src:
+        # Get pixel coordinates for lat/lon
+        py, px = src.index(lon, lat)
+        w, h = src.width, src.height
+        
+        # Ensure we don't go out of bounds
+        col_off = max(0, min(px - crop_size // 2, w - crop_size))
+        row_off = max(0, min(py - crop_size // 2, h - crop_size))
+        
+        window = Window(col_off, row_off, crop_size, crop_size)
+        ir_data = src.read(1, window=window)
+        
+    return ir_data, item.id
+
 if __name__ == '__main__':
     fetch_planetary_computer_data(num_scenes=20, crop_size=512)

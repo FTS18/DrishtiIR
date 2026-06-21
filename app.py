@@ -13,7 +13,11 @@ import numpy as np
 import cv2
 import torch
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageEnhance
+from streamlit_image_comparison import image_comparison
+import folium
+from streamlit_folium import st_folium
+from src.fetch_real_data import fetch_single_coordinate
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -75,8 +79,10 @@ input[type=range] { accent-color: #F5821F !important; }
 
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] {
-    background-color: var(--surface) !important;
-    border-right: 1px solid var(--border) !important;
+    background-color: rgba(8, 13, 31, 0.6) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    border-right: 1px solid rgba(28, 43, 74, 0.5) !important;
 }
 section[data-testid="stSidebar"] * {
     font-family: var(--sans) !important;
@@ -179,10 +185,14 @@ hr { border-color: var(--border) !important; margin: 1rem 0 !important; }
 }
 
 .sw-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
+    background: rgba(13, 21, 48, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(28, 43, 74, 0.6);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
     padding: 1.2rem 1.4rem;
     margin-bottom: 1rem;
+    border-radius: 8px;
 }
 .sw-card-title {
     font-family: var(--mono);
@@ -408,6 +418,21 @@ with st.sidebar:
     device_color = "#F5821F" if DEVICE == "cuda" else "#7A8FAD"
     st.markdown(f'<div style="font-family:\'Bricolage Grotesque\',monospace;font-size:0.82rem;color:{device_color};font-weight:600;">{device_label}</div>', unsafe_allow_html=True)
 
+    st.markdown('<div class="sw-card-title" style="font-family:\'Bricolage Grotesque\',monospace;font-size:0.65rem;letter-spacing:0.14em;text-transform:uppercase;color:#3A4E6E;border-bottom:1px solid #1C2B4A;padding-bottom:6px;margin:16px 0 10px;">Post-Processing</div>', unsafe_allow_html=True)
+    sharpness = st.slider("Sharpness", 0.0, 3.0, 1.0, 0.1)
+    contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
+    saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
+
+    def apply_post_processing(rgb_array):
+        pil_img = Image.fromarray(rgb_array)
+        if sharpness != 1.0:
+            pil_img = ImageEnhance.Sharpness(pil_img).enhance(sharpness)
+        if contrast != 1.0:
+            pil_img = ImageEnhance.Contrast(pil_img).enhance(contrast)
+        if saturation != 1.0:
+            pil_img = ImageEnhance.Color(pil_img).enhance(saturation)
+        return np.array(pil_img)
+
     st.markdown('<div class="sw-card-title" style="font-family:\'Bricolage Grotesque\',monospace;font-size:0.65rem;letter-spacing:0.14em;text-transform:uppercase;color:#3A4E6E;border-bottom:1px solid #1C2B4A;padding-bottom:6px;margin:16px 0 10px;">Pipeline</div>', unsafe_allow_html=True)
 
     steps = [
@@ -444,8 +469,8 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_single, tab_demo, tab_batch, tab_about = st.tabs([
-    "Single Image", "Demo Mode", "Batch Evaluate", "About"
+tab_single, tab_live, tab_demo, tab_batch, tab_about = st.tabs([
+    "Single Image", "Live Map", "Demo Mode", "Batch Evaluate", "About"
 ])
 
 
@@ -504,14 +529,19 @@ with tab_single:
                     img_gray = img_arr.squeeze()
                 ir_preprocessed = preprocess_array(img_gray, tile_size=tile_size)
                 ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_preprocessed, DEVICE)
+                rgb_out = apply_post_processing(rgb_out)
 
-            img_col1, img_col2 = st.columns(2)
-            with img_col1:
-                st.markdown('<div class="sw-img-label">Input IR (Thermal)</div>', unsafe_allow_html=True)
-                st.image(ir_disp, use_container_width=True, clamp=True)
-            with img_col2:
-                st.markdown('<div class="sw-img-label">Colorized RGB Output</div>', unsafe_allow_html=True)
-                st.image(rgb_out, use_container_width=True, clamp=True)
+            ir_3ch = cv2.cvtColor(ir_disp, cv2.COLOR_GRAY2RGB)
+            image_comparison(
+                img1=Image.fromarray(rgb_out),
+                img2=Image.fromarray(ir_3ch),
+                label1="Colorized RGB (30m)",
+                label2="Input IR Thermal (100m)",
+                width=700,
+                starting_position=50,
+                show_labels=True,
+                make_responsive=True
+            )
 
             st.markdown(f"""
             <div class="sw-metric-row">
@@ -553,7 +583,58 @@ with tab_single:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 2 — Demo Mode
+# TAB 2 — Live Map Integration
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab_live:
+    st.markdown("""
+    <div class="sw-card">
+        <div class="sw-card-title">Live STAC Inference</div>
+        <div style="color:#7A8FAD;font-size:0.82rem;font-family:'Bricolage Grotesque',monospace;">
+            Click anywhere on the map of India. The system will query the Microsoft Planetary Computer, 
+            download the latest cloud-free Landsat 8/9 thermal image for that exact coordinate, and run inference on the fly.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    m = folium.Map(location=[22.0, 79.0], zoom_start=5, tiles="CartoDB dark_matter")
+    m.add_child(folium.LatLngPopup())
+    
+    st_data = st_folium(m, width=1000, height=450)
+    
+    if st_data and st_data.get("last_clicked"):
+        lat = st_data["last_clicked"]["lat"]
+        lon = st_data["last_clicked"]["lng"]
+        
+        st.markdown(f'<div class="sw-img-label" style="margin-top:1rem;">Fetching Data for Lat: {lat:.4f}, Lon: {lon:.4f}</div>', unsafe_allow_html=True)
+        
+        try:
+            with st.spinner("Querying STAC API & downloading thermal data..."):
+                ir_data, scene_id = fetch_single_coordinate(lat, lon, crop_size=tile_size)
+            
+            with st.spinner("Running Pix2Pix GAN..."):
+                gen = load_model()
+                ir_pre = preprocess_array(ir_data, tile_size)
+                ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_pre, DEVICE)
+                rgb_out = apply_post_processing(rgb_out)
+                
+            st.success(f"Successfully colorized scene: {scene_id} in {elapsed_ms:.0f} ms")
+            
+            ir_3ch = cv2.cvtColor(ir_disp, cv2.COLOR_GRAY2RGB)
+            image_comparison(
+                img1=Image.fromarray(rgb_out),
+                img2=Image.fromarray(ir_3ch),
+                label1="Colorized RGB (30m)",
+                label2="Input IR Thermal (100m)",
+                width=700,
+                starting_position=50,
+                make_responsive=True
+            )
+        except Exception as e:
+            st.error(f"Failed to process location: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 3 — Demo Mode
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 with tab_demo:
@@ -594,6 +675,7 @@ with tab_demo:
                 ir_arr = (background * 2.0 - 1.0)[np.newaxis, :, :]
                 gen = load_model()
                 ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_arr, DEVICE)
+                rgb_out = apply_post_processing(rgb_out)
 
             d_col1, d_col2, d_col3 = st.columns(3)
             with d_col1:
@@ -656,6 +738,7 @@ with tab_batch:
             img_arr = np.array(img_pil)
             ir_pre = preprocess_array(img_arr, tile_size)
             ir_disp, rgb_out, ms = run_inference(gen, ir_pre, DEVICE)
+            rgb_out = apply_post_processing(rgb_out)
             results.append({
                 "filename": f.name,
                 "inference_ms": round(ms, 1),
