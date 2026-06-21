@@ -295,20 +295,7 @@ def train(args):
                 noise_pred = model(noisy_rgb, ir_cond, timesteps)
 
                 # MSE loss (primary)
-                loss_mse = F.mse_loss(noise_pred, noise)
-
-                # Fourier Feature loss [Technique #10]
-                loss_fft = fourier_feature_loss(noise_pred, noise)
-
-                # Compute predicted original image (x_0) from the predicted noise
-                alpha_t = noise_scheduler.alphas_cumprod[timesteps].to(device).view(-1, 1, 1, 1)
-                pred_rgb = (noisy_rgb - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
-
-                # Semantic Consistency Loss — applied to predicted RGB image, NOT the noise
-                loss_sem = spectral_semantic_loss(pred_rgb, ir_batch, device)
-
-                # Combined weighted loss
-                loss = loss_mse + 0.1 * loss_fft + 0.05 * loss_sem
+                loss = F.mse_loss(noise_pred, noise)
 
                 accelerator.backward(loss)
 
