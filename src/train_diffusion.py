@@ -100,9 +100,9 @@ def train(args):
     for epoch in range(1, args.num_epochs + 1):
         model.train()
         total_loss = 0.0
-        
-        pbar = tqdm(loader, desc=f"Epoch {epoch:03d}/{args.num_epochs}", leave=False)
-        for ir_batch, rgb_batch in pbar:
+        optimizer.zero_grad()
+        pbar = tqdm(enumerate(loader), total=len(loader), desc=f"Epoch {epoch:03d}/{args.num_epochs}", leave=False)
+        for step, (ir_batch, rgb_batch) in pbar:
             ir_batch = ir_batch.to(device)
             rgb_batch = rgb_batch.to(device)
             
@@ -116,8 +116,6 @@ def train(args):
             # Add noise to the clean RGB images
             noisy_rgb = noise_scheduler.add_noise(rgb_batch, noise, timesteps)
             
-            optimizer.zero_grad()
-            
             # Mixed Precision Forward
             with torch.amp.autocast('cuda'):
                 # Predict the noise residual
@@ -125,14 +123,19 @@ def train(args):
                 
                 # Loss is MSE between predicted noise and actual noise
                 loss = F.mse_loss(noise_pred, noise)
+                # Normalize loss for gradient accumulation
+                loss = loss / args.grad_accum
             
             # Mixed Precision Backward
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
             
-            total_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
+            if ((step + 1) % args.grad_accum == 0) or ((step + 1) == len(loader)):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+            
+            total_loss += (loss.item() * args.grad_accum)
+            pbar.set_postfix(loss=f"{(loss.item() * args.grad_accum):.4f}")
             
         avg_loss = total_loss / len(loader)
         scheduler.step()
@@ -154,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample-dir", type=str, default="samples_diffusion")
     parser.add_argument("--num-epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-accum", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--sample-every", type=int, default=5)

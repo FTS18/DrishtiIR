@@ -93,5 +93,5 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
     print(f"\nFinished! Successfully downloaded {success_count} multi-band pairs.")
 
 if __name__ == '__main__':
-    # Start with 50 for a solid Kaggle run, can scale to 1000+
-    fetch_massive_dataset(num_scenes=50, crop_size=512)
+    # Scaling to 500 for massive Kaggle run
+    fetch_massive_dataset(num_scenes=500, crop_size=512)
