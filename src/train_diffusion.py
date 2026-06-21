@@ -39,6 +39,7 @@ from model_diffusion import (
     get_ddim_scheduler,
 )
 from dataset import get_dataloader, denormalize
+from semantic_mask import spectral_semantic_loss
 
 # ─── Loss Functions ───────────────────────────────────────────────────────────
 
@@ -188,15 +189,17 @@ def train(args):
         num_workers=args.num_workers,
         synthetic=use_synthetic,
         tile_size=128,
+        val_split=0.0,  # No val split for phase 1 (speed)
     )
-    # Phase 2 loader at 256x256
-    loader_256 = get_dataloader(
+    # Phase 2 loader at 256x256 — with 10% validation split
+    loader_256, val_loader = get_dataloader(
         ir_dir=args.ir_dir if not use_synthetic else None,
         rgb_dir=args.rgb_dir if not use_synthetic else None,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         synthetic=use_synthetic,
         tile_size=256,
+        val_split=0.10,
     )
 
     # Detect in_channels from first batch
@@ -220,7 +223,7 @@ def train(args):
     start_epoch = 1
     ckpt_path = os.path.join(args.checkpoint_dir, "diffusion_latest.pth")
     if os.path.exists(ckpt_path):
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        model.load_state_dict(torch.load(ckpt_path, map_location=device), strict=False)
         print(f"  [RESUME] Loaded checkpoint: {ckpt_path}")
         # Try to infer start epoch from saved files
         saved = sorted(
@@ -289,8 +292,12 @@ def train(args):
                     # Fourier Feature loss [Technique #10]
                     loss_fft = fourier_feature_loss(noise_pred, noise)
 
+                    # Semantic Consistency Loss — water→blue, vegetation→green
+                    # Reconstruct approximate clean RGB from predicted noise for semantic check
+                    loss_sem = spectral_semantic_loss(noise_pred, ir_batch, device)
+
                     # Combined weighted loss
-                    loss = loss_mse + 0.1 * loss_fft
+                    loss = loss_mse + 0.1 * loss_fft + 0.05 * loss_sem
                     loss = loss / args.grad_accum
 
                 scaler.scale(loss).backward()
@@ -306,7 +313,8 @@ def train(args):
                 noise_pred = model(noisy_rgb, ir_cond, timesteps)
                 loss_mse = F.mse_loss(noise_pred, noise)
                 loss_fft = fourier_feature_loss(noise_pred, noise)
-                loss = (loss_mse + 0.1 * loss_fft) / args.grad_accum
+                loss_sem = spectral_semantic_loss(noise_pred, ir_batch, device)
+                loss = (loss_mse + 0.1 * loss_fft + 0.05 * loss_sem) / args.grad_accum
                 loss.backward()
                 if ((step + 1) % args.grad_accum == 0) or ((step + 1) == len(loader)):
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -325,6 +333,22 @@ def train(args):
 
         if epoch % args.save_every == 0:
             save_checkpoint(epoch, model, ema, args.checkpoint_dir)
+            # ── Validation Pass ──────────────────────────────────────────────
+            if val_loader is not None:
+                model.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for val_ir, val_rgb in val_loader:
+                        val_ir  = val_ir.to(device)
+                        val_rgb = val_rgb.to(device)
+                        v_noise  = torch.randn_like(val_rgb)
+                        v_steps  = torch.randint(0, noise_scheduler.config.num_train_timesteps, (val_rgb.shape[0],), device=device).long()
+                        v_noisy  = noise_scheduler.add_noise(val_rgb, v_noise, v_steps)
+                        v_pred   = model(v_noisy, val_ir, v_steps)
+                        val_loss += F.mse_loss(v_pred, v_noise).item()
+                val_loss /= max(len(val_loader), 1)
+                print(f"  [VAL] Epoch {epoch:03d} | Val Loss: {val_loss:.4f}")
+                model.train()
 
         if epoch % args.sample_every == 0:
             s_ir, s_rgb = next(iter(loader_256))

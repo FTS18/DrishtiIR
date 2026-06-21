@@ -188,28 +188,50 @@ def get_dataloader(
     synthetic: bool = False,
     num_synthetic: int = 200,
     tile_size: int = TILE_SIZE,
-) -> DataLoader:
+    val_split: float = 0.0,
+) -> "DataLoader | tuple[DataLoader, DataLoader | None]":
     """
     Returns a DataLoader for either real GeoTIFF data or synthetic demo data.
 
-    Priority: If synthetic=True or directories are missing, falls back to SyntheticIRDataset.
-    tile_size: controls resolution (128 for Phase 1, 256 for Phase 2 progressive training).
+    tile_size  : controls resolution (128 for Phase 1, 256 for Phase 2 progressive training).
+    val_split  : fraction of data to hold out for validation (0.0 = no split, returns single loader).
+                 When > 0, returns (train_loader, val_loader) tuple.
     """
+    from torch.utils.data import random_split
+
     use_synthetic = synthetic or (ir_dir is None) or (not os.path.isdir(str(ir_dir)))
 
     if use_synthetic:
-        dataset = SyntheticIRDataset(num_samples=num_synthetic, tile_size=tile_size)
+        full_dataset = SyntheticIRDataset(num_samples=num_synthetic, tile_size=tile_size)
     else:
-        dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size)
+        full_dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size)
+
+    if val_split > 0.0:
+        n_val   = max(1, int(len(full_dataset) * val_split))
+        n_train = len(full_dataset) - n_val
+        train_ds, val_ds = random_split(
+            full_dataset, [n_train, n_val],
+            generator=torch.Generator().manual_seed(42),
+        )
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True,
+            num_workers=num_workers, pin_memory=torch.cuda.is_available(), drop_last=True,
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=batch_size, shuffle=False,
+            num_workers=num_workers, pin_memory=torch.cuda.is_available(), drop_last=False,
+        )
+        return train_loader, val_loader
 
     return DataLoader(
-        dataset,
+        full_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         drop_last=True,
     )
+
 
 
 if __name__ == "__main__":

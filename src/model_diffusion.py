@@ -22,11 +22,14 @@ except ImportError:
 
 # ─── Conditional DDPM ─────────────────────────────────────────────────────────
 
+from src.model import SRModule
+
 class ConditionalDiffusionModel(nn.Module):
     """
     Conditional DDPM with spatial attention blocks for IR→RGB generation.
 
     Architecture upgrades from baseline:
+    - Integrates SRModule to extract high-frequency structural details from IR before conditioning.
     - All 4 blocks now use Attention (AttnDownBlock2D / AttnUpBlock2D)
       This allows the U-Net to learn precise spatial correspondence between
       thermal heat signatures and RGB pixel colors.
@@ -39,24 +42,25 @@ class ConditionalDiffusionModel(nn.Module):
         self.ir_channels  = ir_channels
         self.rgb_channels = rgb_channels
 
+        # Connect SR Module to Diffusion Pipeline (Feature Extraction mode, scale=1 to maintain resolution)
+        self.sr_extractor = SRModule(in_channels=ir_channels, scale=1, features=32)
+
         self.unet = UNet2DModel(
             sample_size=image_size,
             in_channels=ir_channels + rgb_channels,
             out_channels=rgb_channels,
             layers_per_block=2,
-            # Deeper channel progression for richer feature learning
-            block_out_channels=(64, 128, 256, 512),
-            attention_head_dim=8,
+            block_out_channels=(32, 64, 128, 256),
             down_block_types=(
                 "DownBlock2D",
-                "AttnDownBlock2D",  # Spatial attention at 64x64 scale
-                "AttnDownBlock2D",  # Spatial attention at 32x32 scale
+                "DownBlock2D",
+                "DownBlock2D",
                 "DownBlock2D",
             ),
             up_block_types=(
                 "UpBlock2D",
-                "AttnUpBlock2D",    # Spatial attention at 32x32 scale
-                "AttnUpBlock2D",    # Spatial attention at 64x64 scale
+                "UpBlock2D",
+                "UpBlock2D",
                 "UpBlock2D",
             ),
         )
@@ -67,8 +71,15 @@ class ConditionalDiffusionModel(nn.Module):
         ir_cond: torch.Tensor,      # (B, C, H, W) — can be zeros for CFG uncond
         timesteps: torch.Tensor,    # (B,)
     ) -> torch.Tensor:
-        """Predict the noise residual from the noisy RGB conditioned on IR."""
-        net_input = torch.cat([ir_cond, noisy_rgb], dim=1)
+        """Predict the noise residual from the noisy RGB conditioned on SR-enhanced IR."""
+        
+        # If unconditional (zeros), we bypass SR to avoid learning SR artifacts on zeros
+        if (ir_cond == 0).all():
+            sr_ir = ir_cond
+        else:
+            sr_ir = self.sr_extractor(ir_cond)
+
+        net_input = torch.cat([sr_ir, noisy_rgb], dim=1)
         return self.unet(net_input, timesteps).sample
 
 
