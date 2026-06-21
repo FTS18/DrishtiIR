@@ -70,10 +70,10 @@ class LandsatIRDataset(Dataset):
             "Install it with: pip install rasterio"
         )
         self.ir_files = sorted(
-            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg"))]
+            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg", ".npy"))]
         )
         self.rgb_files = sorted(
-            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg"))]
+            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg", ".npy"))]
         )
         assert len(self.ir_files) == len(self.rgb_files), (
             f"IR and RGB file counts do not match: {len(self.ir_files)} vs {len(self.rgb_files)}"
@@ -88,10 +88,17 @@ class LandsatIRDataset(Dataset):
         ir_path = self.ir_files[idx]
         rgb_path = self.rgb_files[idx]
 
-        with rasterio.open(ir_path) as src:
-            ir_arr = src.read().astype(np.float32) # Shape: (C, H, W)
-        with rasterio.open(rgb_path) as src:
-            rgb_arr = src.read().astype(np.float32) # Shape: (3, H, W)
+        if ir_path.endswith(".npy"):
+            ir_arr = np.load(ir_path).astype(np.float32)
+        else:
+            with rasterio.open(ir_path) as src:
+                ir_arr = src.read().astype(np.float32) # Shape: (C, H, W)
+                
+        if rgb_path.endswith(".npy"):
+            rgb_arr = np.load(rgb_path).astype(np.float32)
+        else:
+            with rasterio.open(rgb_path) as src:
+                rgb_arr = src.read().astype(np.float32) # Shape: (3, H, W)
 
         # Handle IR arrays (either 1 channel or 3 channel)
         if ir_arr.shape[0] == 1:
