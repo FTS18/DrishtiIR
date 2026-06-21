@@ -95,6 +95,7 @@ def train(args):
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs)
+    scaler = torch.amp.GradScaler('cuda')
 
     for epoch in range(1, args.num_epochs + 1):
         model.train()
@@ -115,15 +116,20 @@ def train(args):
             # Add noise to the clean RGB images
             noisy_rgb = noise_scheduler.add_noise(rgb_batch, noise, timesteps)
             
-            # Predict the noise residual
-            noise_pred = model(noisy_rgb, ir_batch, timesteps)
-            
-            # Loss is MSE between predicted noise and actual noise
-            loss = F.mse_loss(noise_pred, noise)
-            
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            
+            # Mixed Precision Forward
+            with torch.amp.autocast('cuda'):
+                # Predict the noise residual
+                noise_pred = model(noisy_rgb, ir_batch, timesteps)
+                
+                # Loss is MSE between predicted noise and actual noise
+                loss = F.mse_loss(noise_pred, noise)
+            
+            # Mixed Precision Backward
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             total_loss += loss.item()
             pbar.set_postfix(loss=f"{loss.item():.4f}")
