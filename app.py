@@ -482,8 +482,12 @@ with tab_single:
         if uploaded is not None:
             with st.spinner("Running IR to RGB inference..."):
                 gen = load_model()
-                img_pil = Image.open(uploaded)
-                img_arr = np.array(img_pil)
+                img_bytes = uploaded.getvalue()
+                img_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+                if img_arr is None:
+                    img_pil = Image.open(uploaded)
+                    img_arr = np.array(img_pil)
+                
                 if img_arr.ndim == 3 and img_arr.shape[2] > 1:
                     img_gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
                 else:
