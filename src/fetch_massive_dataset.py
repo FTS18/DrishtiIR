@@ -33,6 +33,7 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
     search = catalog.search(
         collections=["landsat-c2-l2"],
         bbox=bbox,
+        datetime="2022-01-01/2023-12-31",
         query={"eo:cloud_cover": {"lt": 2}}, 
         max_items=num_scenes
     )
