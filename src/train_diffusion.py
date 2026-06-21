@@ -139,13 +139,22 @@ def save_sample_images(
 from accelerate import Accelerator
 
 def train(args):
+    # ── L40S Hardware Optimizations ───────────────────────────────────────────
+    # BF16: L40S has dedicated BF16 tensor cores (faster + more numerically stable than FP16)
+    # TF32: NVIDIA A/L series GPUs run matmul in TF32 automatically when enabled
+    import torch.backends.cudnn as cudnn
+    torch.backends.cuda.matmul.allow_tf32 = True   # 8x faster matmul on L40S vs FP32
+    cudnn.allow_tf32 = True                         # Faster conv via TF32
+    cudnn.benchmark  = True                         # Auto-tune fastest conv algorithm
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_accum,
-        mixed_precision="fp16"
+        mixed_precision="bf16"   # L40S native: more stable than fp16, no loss scaling needed
     )
     device = accelerator.device
     print(f"\n{'='*60}")
     print(f"  DrishtiIR Diffusion Training  |  Device: {device}")
+    print(f"  Precision: BF16 | TF32: ON | cuDNN Benchmark: ON")
     print(f"{'='*60}\n")
 
     # ── Progressive Resolution ────────────────────────────────────────────────
@@ -188,7 +197,15 @@ def train(args):
 
     # Count params
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"  Model parameters: {total_params:,}\n")
+    print(f"  Model parameters: {total_params:,}")
+
+    # torch.compile: fuses kernels → ~30% faster on L40S (PyTorch 2.0+)
+    try:
+        model = torch.compile(model, mode="reduce-overhead")
+        print(f"  torch.compile: ENABLED (reduce-overhead mode)")
+    except Exception as e:
+        print(f"  torch.compile: SKIPPED ({e})")
+    print()
 
     # EMA Model
     ema = EMAModel(model, decay=0.9999)
@@ -332,18 +349,21 @@ def train(args):
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="DrishtiIR Diffusion Training")
+    parser = argparse.ArgumentParser(description="DrishtiIR Diffusion Training — optimized for L40S (48GB BF16)")
     parser.add_argument("--ir-dir",         type=str,   default=None)
     parser.add_argument("--rgb-dir",        type=str,   default=None)
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples_diffusion")
     parser.add_argument("--num-epochs",     type=int,   default=300)
-    parser.add_argument("--batch-size",     type=int,   default=4)
-    parser.add_argument("--grad-accum",     type=int,   default=2,   help="Gradient accumulation steps")
-    parser.add_argument("--lr",             type=float, default=2e-4)
+    # L40S has 48GB VRAM — batch 16 at 256px fits easily and fills the GPU properly
+    parser.add_argument("--batch-size",     type=int,   default=16)
+    # With batch=16 we don't need grad accumulation
+    parser.add_argument("--grad-accum",     type=int,   default=1,   help="Gradient accumulation steps (1 = off)")
+    parser.add_argument("--lr",             type=float, default=5e-4,  help="LR scales with batch size: sqrt(16/4)*2e-4")
     parser.add_argument("--save-every",     type=int,   default=10)
     parser.add_argument("--sample-every",   type=int,   default=5)
-    parser.add_argument("--num-workers",    type=int,   default=0)
+    # L40S has 16+ CPU cores — use 8 workers for parallel data loading
+    parser.add_argument("--num-workers",    type=int,   default=8)
     parser.add_argument("--guidance-scale", type=float, default=3.0,  help="CFG guidance scale")
     parser.add_argument("--ddim-steps",     type=int,   default=50,   help="Number of DDIM inference steps")
     args = parser.parse_args()
