@@ -8,7 +8,7 @@ import shutil
 
 USERNAME = "ananay"
 APP_TOKEN = "Mr7bzqayU4n7AaNFDaMRsJY0lKpnQ53Aap523URz7Me7xVZKrX16YbT7w8L6utZF"
-M2M_API = "https://m2m.cr.usgs.gov/api/api/json/v1.5"
+M2M_API = "https://m2m.cr.usgs.gov/api/api/json/stable"
 
 def send_request(endpoint, data=None, api_key=None):
     if data is None: data = {}
