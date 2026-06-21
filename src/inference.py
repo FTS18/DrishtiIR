@@ -150,6 +150,58 @@ def run_inference(
     return ir_display, rgb_output, elapsed_ms
 
 
+def run_inference_tta(
+    gen: Generator,
+    ir_array: np.ndarray,   # shape: (C, H, W) in [-1, 1]
+    device: str = "cpu",
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Test-Time Augmentation (TTA) [Technique #15]:
+    Runs the model on 8 augmented copies of the input image (4 rotations × 2 flips),
+    then averages all predictions together. The averaged composite is consistently
+    sharper, more color-accurate, and less artifact-prone than a single forward pass.
+
+    Returns:
+      ir_display  : uint8 grayscale IR image (H, W)
+      rgb_output  : uint8 TTA-averaged colorized output (H, W, 3)
+      elapsed_ms  : total inference time in milliseconds
+    """
+    x = torch.tensor(ir_array, dtype=torch.float32).unsqueeze(0).to(device)
+
+    t0 = time.perf_counter()
+
+    # 8 augmentations: 4 rotations (0°, 90°, 180°, 270°) × 2 flips (normal, horizontally flipped)
+    augmented_inputs = []
+    for k in range(4):
+        rotated = torch.rot90(x, k, dims=[2, 3])
+        augmented_inputs.append(rotated)
+        augmented_inputs.append(torch.flip(rotated, dims=[3]))  # Horizontal flip
+
+    # Run all 8 forward passes and de-augment the outputs
+    predictions = []
+    with torch.no_grad():
+        for i, aug_x in enumerate(augmented_inputs):
+            pred = gen(aug_x)
+            k = i // 2
+            flipped = (i % 2 == 1)
+            # Reverse the flip
+            if flipped:
+                pred = torch.flip(pred, dims=[3])
+            # Reverse the rotation
+            pred = torch.rot90(pred, -k, dims=[2, 3])
+            predictions.append(pred)
+
+    # Average all 8 de-augmented predictions
+    avg_pred = torch.stack(predictions, dim=0).mean(dim=0)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    # Denormalize
+    ir_display  = denormalize(ir_array[0])
+    rgb_output  = denormalize(avg_pred[0].permute(1, 2, 0).cpu().numpy())
+
+    return ir_display, rgb_output, elapsed_ms
+
+
 # ─── Metrics ──────────────────────────────────────────────────────────────────
 
 def compute_metrics(

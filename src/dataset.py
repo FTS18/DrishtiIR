@@ -187,18 +187,20 @@ def get_dataloader(
     num_workers: int = 2,
     synthetic: bool = False,
     num_synthetic: int = 200,
+    tile_size: int = TILE_SIZE,
 ) -> DataLoader:
     """
     Returns a DataLoader for either real GeoTIFF data or synthetic demo data.
 
     Priority: If synthetic=True or directories are missing, falls back to SyntheticIRDataset.
+    tile_size: controls resolution (128 for Phase 1, 256 for Phase 2 progressive training).
     """
     use_synthetic = synthetic or (ir_dir is None) or (not os.path.isdir(str(ir_dir)))
 
     if use_synthetic:
-        dataset = SyntheticIRDataset(num_samples=num_synthetic)
+        dataset = SyntheticIRDataset(num_samples=num_synthetic, tile_size=tile_size)
     else:
-        dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir)
+        dataset = LandsatIRDataset(ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size)
 
     return DataLoader(
         dataset,
