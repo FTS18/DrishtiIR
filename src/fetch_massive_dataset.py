@@ -26,14 +26,15 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
         modifier=planetary_computer.sign_inplace,
     )
     
-    # Large bounding box (e.g. all of India)
-    bbox = [68.1, 8.0, 97.4, 37.1]
+    # Instead of a massive bounding box that crashes the API, we use a single Point (New Delhi region).
+    # This forces the STAC API to only search one Landsat path/row, returning the 50 images instantly.
+    point = {"type": "Point", "coordinates": [77.2, 28.6]}
     
-    print(f"Searching for up to {num_scenes} cloud-free (<2%) Landsat 8/9 scenes...")
+    print(f"Searching for up to {num_scenes} cloud-free (<5%) Landsat 8/9 scenes...")
     search = catalog.search(
         collections=["landsat-c2-l2"],
-        bbox=bbox,
-        query={"eo:cloud_cover": {"lt": 2}}, 
+        intersects=point,
+        query={"eo:cloud_cover": {"lt": 5}}, 
         max_items=num_scenes
     )
     
