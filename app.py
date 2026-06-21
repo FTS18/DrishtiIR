@@ -483,10 +483,20 @@ with tab_single:
             with st.spinner("Running IR to RGB inference..."):
                 gen = load_model()
                 img_bytes = uploaded.getvalue()
-                img_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
-                if img_arr is None:
-                    img_pil = Image.open(uploaded)
-                    img_arr = np.array(img_pil)
+                try:
+                    import rasterio
+                    from rasterio.io import MemoryFile
+                    with MemoryFile(img_bytes) as memfile:
+                        with memfile.open() as src:
+                            img_arr = src.read(1)
+                            if img_arr.ndim == 2:
+                                img_arr = img_arr[:, :, np.newaxis] # add channel dim for cvtColor logic below if needed, though it's 1 channel
+                except:
+                    # Fallback for PNG/JPG
+                    img_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+                    if img_arr is None:
+                        img_pil = Image.open(uploaded)
+                        img_arr = np.array(img_pil)
                 
                 if img_arr.ndim == 3 and img_arr.shape[2] > 1:
                     img_gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
