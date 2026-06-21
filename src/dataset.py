@@ -28,11 +28,13 @@ except ImportError:
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-# Standard Landsat Collection-2 Level-2 surface reflectance scale limits
-IR_DN_MIN = 5000
-IR_DN_MAX = 40000
-RGB_DN_MIN = 0
-RGB_DN_MAX = 30000
+# Standard Landsat Collection-2 Level-2 surface reflectance/temperature scale limits
+# Thermal (ST_B10): ~35,000 to ~55,000 DN (approx 268K to 337K)
+IR_DN_MIN = 35000
+IR_DN_MAX = 55000
+# RGB (SR_B2,3,4): ~7000 (0.0 reflectance) to ~45000 (1.0 reflectance)
+RGB_DN_MIN = 7000
+RGB_DN_MAX = 45000
 
 TILE_SIZE = 256
 
