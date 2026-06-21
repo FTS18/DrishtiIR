@@ -35,56 +35,36 @@ except ImportError:
 # Spread across all continents, biomes, and climate zones.
 
 GLOBAL_REGIONS = [
-    # ── Tropical Rainforest ──────────────────────────────────────────────────
-    ("Amazon_Brazil",       [-62.0, -5.0,  -61.0, -4.0 ]),
-    ("Congo_DRC",           [ 24.0, -2.0,   25.0, -1.0 ]),
-    ("Borneo_Malaysia",     [114.0,  3.0,  115.0,  4.0 ]),
+    # ── India (ISRO Focus) - Diverse Terrains ────────────────────────────────
+    ("Mumbai_Urban",        [ 72.5,  18.5,  73.5,  19.5]),
+    ("Delhi_NCR_Urban",     [ 76.5,  28.0,  77.5,  29.0]),
+    ("Bangalore_Urban",     [ 77.0,  12.5,  78.0,  13.5]),
+    ("Kolkata_Wetland",     [ 88.0,  22.0,  89.0,  23.0]),
+    ("Chennai_Coast",       [ 80.0,  12.5,  81.0,  13.5]),
+    ("Hyderabad_Deccan",    [ 78.0,  17.0,  79.0,  18.0]),
+    ("Ganges_Agri_UP",      [ 79.0,  26.5,  80.0,  27.5]),
+    ("Punjab_Farms",        [ 75.0,  30.0,  76.0,  31.0]),
+    ("Kerala_Backwaters",   [ 76.0,   9.0,  77.0,  10.0]),
+    ("Western_Ghats",       [ 74.0,  15.0,  75.0,  16.0]),
+    ("Assam_Brahmaputra",   [ 92.0,  26.0,  93.0,  27.0]),
 
-    # ── Desert / Arid ────────────────────────────────────────────────────────
-    ("Sahara_Algeria",      [  3.0, 27.0,    4.0, 28.0 ]),
-    ("Arabian_Saudi",       [ 45.0, 24.0,   46.0, 25.0 ]),
-    ("Atacama_Chile",       [-69.0,-22.0,  -68.0,-21.0 ]),
-    ("Gobi_Mongolia",       [105.0, 43.0,  106.0, 44.0 ]),
-
-    # ── Temperate Forest ─────────────────────────────────────────────────────
-    ("Pacific_NW_USA",      [-122.0, 47.0, -121.0, 48.0]),
-    ("Central_Europe_DE",   [ 13.0,  51.0,  14.0,  52.0]),
-    ("Patagonia_Argentina", [-71.0, -42.0, -70.0, -41.0]),
-
-    # ── Snow / Arctic / Tundra ───────────────────────────────────────────────
-    ("Siberia_Russia",      [ 90.0,  62.0,  91.0,  63.0]),
-    ("Northern_Canada",     [-100.0, 60.0, -99.0,  61.0]),
-    ("Greenland_Coast",     [-45.0,  67.0, -44.0,  68.0]),
-
-    # ── Coastline / Ocean Interface ──────────────────────────────────────────
-    ("Bay_of_Bengal_IN",    [ 80.0,  13.0,  81.0,  14.0]),
-    ("Gulf_of_Mexico_USA",  [-90.0,  29.0, -89.0,  30.0]),
-    ("Mediterranean_Italy", [ 12.0,  37.0,  13.0,  38.0]),
-
-    # ── Urban / Built-up ─────────────────────────────────────────────────────
+    # ── High-Value Global Urban ──────────────────────────────────────────────
     ("Tokyo_Japan",         [139.0,  35.0, 140.0,  36.0]),
-    ("London_UK",           [ -1.0,  51.0,   0.0,  52.0]),
-    ("NYC_USA",             [-74.0,  40.0, -73.0,  41.0]),
-    ("Mumbai_India",        [ 72.0,  19.0,  73.0,  20.0]),
+    ("London_UK",           [ -0.5,  51.0,   0.5,  51.5]),
+    ("NYC_USA",             [-74.5,  40.5, -73.5,  41.5]),
+    ("Paris_France",        [  2.0,  48.5,   2.5,  49.0]),
+    ("Cairo_Egypt",         [ 31.0,  30.0,  31.5,  30.5]),
 
-    # ── Agricultural / Cropland ──────────────────────────────────────────────
-    ("US_Midwest",          [-95.0,  41.0, -94.0,  42.0]),
-    ("Ganges_Plain_India",  [ 78.0,  27.0,  79.0,  28.0]),
+    # ── High-Value Global Agriculture & Forest ───────────────────────────────
+    ("US_Midwest_Farms",    [-95.0,  41.0, -94.0,  42.0]),
     ("Ukraine_Fields",      [ 32.0,  49.0,  33.0,  50.0]),
+    ("Amazon_Rainforest",   [-62.0,  -5.0, -61.0,  -4.0]),
+    ("Central_Europe_DE",   [ 13.0,  51.0,  14.0,  52.0]),
+    ("Pacific_NW_USA",      [-122.0, 47.0, -121.0, 48.0]),
 
-    # ── Savanna / Grassland ──────────────────────────────────────────────────
-    ("East_Africa_Kenya",   [ 36.0,  -1.0,  37.0,   0.0]),
-    ("Australian_Outback",  [133.0, -23.0, 134.0, -22.0]),
-    ("South_Africa_Veld",   [ 26.0, -27.0,  27.0, -26.0]),
-
-    # ── Mountain / High Altitude ─────────────────────────────────────────────
-    ("Himalaya_Nepal",      [ 85.0,  28.0,  86.0,  29.0]),
-    ("Andes_Peru",          [-75.0, -12.0, -74.0, -11.0]),
-    ("Alps_Switzerland",    [  8.0,  46.0,   9.0,  47.0]),
-
-    # ── Wetland / River Delta ────────────────────────────────────────────────
+    # ── High-Value River Deltas (Water/Land boundary) ────────────────────────
     ("Mekong_Delta",        [105.0,   9.0, 106.0,  10.0]),
-    ("Nile_Delta_Egypt",    [ 31.0,  31.0,  32.0,  32.0]),
+    ("Nile_Delta",          [ 31.0,  31.0,  32.0,  32.0]),
 ]
 
 
@@ -205,7 +185,7 @@ def fetch_massive_dataset(
 
 if __name__ == '__main__':
     fetch_massive_dataset(
-        num_scenes=100,
-        scenes_per_region=4,   # Max 4 scenes per region = guaranteed geographic spread
+        num_scenes=200,        # Increased total target
+        scenes_per_region=10,  # Allow up to 10 from good regions
         crop_size=512,
     )
