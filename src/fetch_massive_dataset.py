@@ -26,15 +26,14 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
         modifier=planetary_computer.sign_inplace,
     )
     
-    # Smaller bounding box (Central India region) to prevent API timeouts
-    bbox = [77.0, 20.0, 79.0, 22.0]
+    # Large bounding box (e.g. all of India)
+    bbox = [68.1, 8.0, 97.4, 37.1]
     
-    print(f"Searching for up to {num_scenes} low-cloud (<5%) Landsat 8/9 scenes...")
+    print(f"Searching for up to {num_scenes} cloud-free (<2%) Landsat 8/9 scenes...")
     search = catalog.search(
         collections=["landsat-c2-l2"],
         bbox=bbox,
-        datetime="2023-01-01/2023-03-31",
-        query={"eo:cloud_cover": {"lt": 5}}, 
+        query={"eo:cloud_cover": {"lt": 2}}, 
         max_items=num_scenes
     )
     
@@ -94,5 +93,5 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
     print(f"\nFinished! Successfully downloaded {success_count} multi-band pairs.")
 
 if __name__ == '__main__':
-    # Scaling to 100 as requested to prevent STAC API aggregation timeouts
-    fetch_massive_dataset(num_scenes=100, crop_size=512)
+    # Reverted to exactly 50 scenes to match what successfully worked on Kaggle
+    fetch_massive_dataset(num_scenes=50, crop_size=512)
