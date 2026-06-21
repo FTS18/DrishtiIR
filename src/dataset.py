@@ -4,11 +4,10 @@ dataset.py
 Geospatial data pipeline for paired Landsat 8/9 IR and RGB tiles.
 
 Handles:
+- .npy reading (from fetch_massive_dataset.py)
 - TIFF reading via rasterio
-- Bilinear upsampling of 100m thermal band to 30m grid
-- Patch/tile generation with overlap
-- Normalization to [-1, 1] for GAN training
-- Fallback synthetic dataset for demo/testing
+- Resize/crop to requested tile_size (128 or 256 for progressive training)
+- Normalization to [-1, 1] for diffusion training
 """
 
 import os
@@ -53,33 +52,58 @@ def denormalize(tensor: np.ndarray) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
-# ─── Real GeoTIFF Dataset ─────────────────────────────────────────────────────
+# ─── Resize Helper ────────────────────────────────────────────────────────────
+
+def resize_array(arr: np.ndarray, target_size: int) -> np.ndarray:
+    """
+    Resize a (C, H, W) array to (C, target_size, target_size).
+    Uses center crop if the image is larger, or bilinear resize otherwise.
+    """
+    C, H, W = arr.shape
+    if H == target_size and W == target_size:
+        return arr
+
+    # If image is larger than target, take a random crop during training
+    if H > target_size and W > target_size:
+        # Random crop for data augmentation
+        top  = np.random.randint(0, H - target_size)
+        left = np.random.randint(0, W - target_size)
+        return arr[:, top:top + target_size, left:left + target_size]
+
+    # Otherwise resize each channel
+    resized = []
+    for i in range(C):
+        resized.append(cv2.resize(arr[i], (target_size, target_size), interpolation=cv2.INTER_LINEAR))
+    return np.stack(resized)
+
+
+# ─── Real GeoTIFF / NPY Dataset ──────────────────────────────────────────────
 
 class LandsatIRDataset(Dataset):
     """
-    Loads paired IR (Landsat Band 10/11) and RGB (Bands 4,3,2) GeoTIFF tiles.
+    Loads paired IR and RGB tiles from .npy or .tif files.
 
     Directory layout expected:
-        data/train/ir/  → single-channel .tif files (thermal band)
-        data/train/rgb/ → three-channel .tif files (R, G, B bands stacked)
+        data/train_massive/ir_multiband/  → .npy files with shape (C, H, W)
+        data/train_massive/rgb/           → .npy files with shape (3, H, W)
     """
 
     def __init__(self, ir_dir: str, rgb_dir: str, tile_size: int = TILE_SIZE):
-        assert RASTERIO_AVAILABLE, (
-            "rasterio is required for GeoTIFF dataset loading. "
-            "Install it with: pip install rasterio"
-        )
+        valid_ext = (".tif", ".jpg", ".png", ".jpeg", ".npy")
         self.ir_files = sorted(
-            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg", ".npy"))]
+            [os.path.join(ir_dir, f) for f in os.listdir(ir_dir) if f.endswith(valid_ext)]
         )
         self.rgb_files = sorted(
-            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith((".tif", ".jpg", ".png", ".jpeg", ".npy"))]
+            [os.path.join(rgb_dir, f) for f in os.listdir(rgb_dir) if f.endswith(valid_ext)]
         )
         assert len(self.ir_files) == len(self.rgb_files), (
             f"IR and RGB file counts do not match: {len(self.ir_files)} vs {len(self.rgb_files)}"
         )
+        assert len(self.ir_files) > 0, (
+            f"No files found in {ir_dir} or {rgb_dir}. "
+            "Run fetch_massive_dataset.py first."
+        )
         self.tile_size = tile_size
-        self.transform = None
 
     def __len__(self) -> int:
         return len(self.ir_files)
@@ -88,51 +112,52 @@ class LandsatIRDataset(Dataset):
         ir_path = self.ir_files[idx]
         rgb_path = self.rgb_files[idx]
 
+        # ── Load arrays ──────────────────────────────────────────────────
         if ir_path.endswith(".npy"):
             ir_arr = np.load(ir_path).astype(np.float32)
         else:
             with rasterio.open(ir_path) as src:
-                ir_arr = src.read().astype(np.float32) # Shape: (C, H, W)
-                
+                ir_arr = src.read().astype(np.float32)
+
         if rgb_path.endswith(".npy"):
             rgb_arr = np.load(rgb_path).astype(np.float32)
         else:
             with rasterio.open(rgb_path) as src:
-                rgb_arr = src.read().astype(np.float32) # Shape: (3, H, W)
+                rgb_arr = src.read().astype(np.float32)
 
-        # Handle IR arrays (either 1 channel or 3 channel)
-        if ir_arr.shape[0] == 1:
-            if ir_arr.max() <= 255.0:
-                ir_arr = ir_arr / 255.0 * 2.0 - 1.0
-            else:
-                ir_arr = np.clip(ir_arr, IR_DN_MIN, IR_DN_MAX)
-                ir_arr = (ir_arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
-                ir_arr = ir_arr * 2.0 - 1.0
-        elif ir_arr.shape[0] >= 3:
-            # Multi-band: B10, B6, B5
-            if ir_arr.max() <= 255.0:
-                ir_arr = ir_arr / 255.0 * 2.0 - 1.0
-            else:
-                ir_arr = np.clip(ir_arr, 0.0, 65535.0)
-                ir_arr = (ir_arr / 65535.0) * 2.0 - 1.0
+        # ── Use the same random crop seed for IR and RGB ─────────────────
+        state = np.random.get_state()
+        ir_arr  = resize_array(ir_arr, self.tile_size)
+        np.random.set_state(state)
+        rgb_arr = resize_array(rgb_arr, self.tile_size)
 
-        # Handle RGB arrays
+        # ── Normalize IR to [-1, 1] ─────────────────────────────────────
+        if ir_arr.max() > 255.0:
+            # 16-bit Landsat DN values
+            for ch in range(ir_arr.shape[0]):
+                ch_min, ch_max = ir_arr[ch].min(), ir_arr[ch].max()
+                if ch_max > ch_min:
+                    ir_arr[ch] = (ir_arr[ch] - ch_min) / (ch_max - ch_min) * 2.0 - 1.0
+                else:
+                    ir_arr[ch] = 0.0
+        elif ir_arr.max() > 1.0:
+            ir_arr = ir_arr / 255.0 * 2.0 - 1.0
+        # else: already in [0,1] or [-1,1] range
+
+        # ── Normalize RGB to [-1, 1] ────────────────────────────────────
         if rgb_arr.max() > 255.0:
-            rgb_arr = np.clip(rgb_arr, RGB_DN_MIN, RGB_DN_MAX)
-            rgb_arr = (rgb_arr - RGB_DN_MIN) / (RGB_DN_MAX - RGB_DN_MIN)
+            # 16-bit Landsat DN values — per-channel normalization
+            for ch in range(rgb_arr.shape[0]):
+                ch_min, ch_max = rgb_arr[ch].min(), rgb_arr[ch].max()
+                if ch_max > ch_min:
+                    rgb_arr[ch] = (rgb_arr[ch] - ch_min) / (ch_max - ch_min) * 2.0 - 1.0
+                else:
+                    rgb_arr[ch] = 0.0
         elif rgb_arr.max() > 1.0:
-            rgb_arr = rgb_arr / 255.0
+            rgb_arr = rgb_arr / 255.0 * 2.0 - 1.0
 
-        rgb_arr = rgb_arr * 2.0 - 1.0
-
-        ir_tensor = torch.from_numpy(ir_arr)
+        ir_tensor  = torch.from_numpy(ir_arr)
         rgb_tensor = torch.from_numpy(rgb_arr)
-
-        if self.transform:
-            stacked = torch.cat([ir_tensor, rgb_tensor], dim=0)
-            stacked = self.transform(stacked)
-            ir_ch = ir_arr.shape[0]
-            ir_tensor, rgb_tensor = stacked[:ir_ch, ...], stacked[ir_ch:, ...]
 
         return ir_tensor, rgb_tensor
 
@@ -148,7 +173,7 @@ def get_dataloader(
     val_split: float = 0.0,
 ) -> "DataLoader | tuple[DataLoader, DataLoader | None]":
     """
-    Returns a DataLoader for real GeoTIFF data.
+    Returns a DataLoader for real GeoTIFF/NPY data.
 
     tile_size  : controls resolution (128 for Phase 1, 256 for Phase 2 progressive training).
     val_split  : fraction of data to hold out for validation (0.0 = no split, returns single loader).
@@ -188,6 +213,3 @@ def get_dataloader(
         pin_memory=torch.cuda.is_available(),
         drop_last=True,
     )
-
-
-

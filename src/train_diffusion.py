@@ -1,21 +1,19 @@
 """
 train_diffusion.py
 ------------------
-State-of-the-art training script for IR→RGB Conditional Diffusion Model.
-Optimized for Kaggle (P100 or dual T4 x2).
+Training script for IR→RGB Conditional Diffusion Model.
+Optimized for small datasets (50-200 images) on a single GPU.
 
 Active Optimizations:
-  [2]  Cosine Noise Schedule     : Better texture learning vs linear
-  [3]  Classifier-Free Guidance  : 10% unconditional dropout forces stronger conditioning
-  [4]  EMA Weights               : Saved alongside regular weights for smooth inference
-  [6]  Spectral Augmentation     : Random band brightness scaling for sensor robustness
-  [7]  GeoAug                    : Random crops at different spatial scales
-  [9]  SSIM Loss                 : Structural similarity loss on top of MSE
-  [10] Fourier Feature Loss      : High-frequency texture sharpening via FFT
-  [11] Gradient Accumulation     : Simulates large batch sizes within VRAM budget
-  [12] Mixed Precision AMP       : FP16 training for 2x memory efficiency
-  [13] DDIM Sampling             : 50-step preview generation (vs 1000-step = 20x faster)
-  [14] Progressive Resolution    : Train at 128px first, scale to 256px for faster convergence
+  - Cosine Noise Schedule       : Better texture learning vs linear
+  - Classifier-Free Guidance    : 10% unconditional dropout forces stronger conditioning
+  - EMA Weights                 : Saved alongside regular weights for smooth inference
+  - Spectral Augmentation       : Random band brightness scaling for sensor robustness
+  - GeoAug                      : Random flips for rotation invariance
+  - Gradient Accumulation       : Simulates large batch sizes within VRAM budget
+  - Mixed Precision AMP         : FP16 training for 2x memory efficiency
+  - DDIM Sampling               : 50-step preview generation (vs 1000-step = 20x faster)
+  - Progressive Resolution      : Train at 128px first, scale to 256px for faster convergence
 """
 
 import os
@@ -39,51 +37,24 @@ from model_diffusion import (
     get_ddim_scheduler,
 )
 from dataset import get_dataloader, denormalize
-from semantic_mask import spectral_semantic_loss
-
-# ─── Loss Functions ───────────────────────────────────────────────────────────
-
-try:
-    from pytorch_msssim import ssim as ssim_fn
-    SSIM_AVAILABLE = True
-except ImportError:
-    SSIM_AVAILABLE = False
-    print("[WARN] pytorch_msssim not found. SSIM loss disabled.")
 
 
-def fourier_feature_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """
-    Fourier Feature Loss [Technique #10]:
-    Converts both pred and target to frequency domain using FFT.
-    Punishes missing high-frequency textures (edges, ripples, fine detail)
-    that standard MSE loss completely ignores.
-    """
-    pred_fft   = torch.fft.fft2(pred,   norm="ortho")
-    target_fft = torch.fft.fft2(target, norm="ortho")
-    return F.mse_loss(pred_fft.abs(), target_fft.abs())
-
+# ─── Augmentations ────────────────────────────────────────────────────────────
 
 def spectral_augment(ir_batch: torch.Tensor) -> torch.Tensor:
     """
-    Spectral Augmentation [Technique #9]:
     Randomly scales the brightness of each spectral band independently.
     Simulates different atmospheric conditions and sensor calibration variations.
-    Forces the model to be robust to real-world noise.
     """
     if ir_batch.shape[1] < 2:
-        return ir_batch  # Single channel — no per-band scaling needed
+        return ir_batch
     B, C, H, W = ir_batch.shape
-    # Random scale per band: 0.8x to 1.2x brightness
     scales = (torch.rand(B, C, 1, 1, device=ir_batch.device) * 0.4 + 0.8)
     return torch.clamp(ir_batch * scales, -1.0, 1.0)
 
 
 def geospatial_augment(ir_batch: torch.Tensor, rgb_batch: torch.Tensor) -> tuple:
-    """
-    GeoAug — Geospatial Augmentation [Technique #7]:
-    Random horizontal/vertical flip. Forces the model to learn terrain invariant
-    to orientation (e.g., a river runs both left→right and right→left in reality).
-    """
+    """Random horizontal/vertical flip for rotation invariance."""
     if torch.rand(1).item() > 0.5:
         ir_batch  = torch.flip(ir_batch,  dims=[3])
         rgb_batch = torch.flip(rgb_batch, dims=[3])
@@ -97,10 +68,8 @@ def geospatial_augment(ir_batch: torch.Tensor, rgb_batch: torch.Tensor) -> tuple
 
 def save_checkpoint(epoch: int, model: nn.Module, ema: EMAModel, out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
-    # Save both regular weights and EMA weights
     torch.save(model.state_dict(), os.path.join(out_dir, f"diffusion_epoch_{epoch:03d}.pth"))
     torch.save(model.state_dict(), os.path.join(out_dir, "diffusion_latest.pth"))
-    # EMA weights are the ones you use for final inference
     torch.save(ema.state_dict(), os.path.join(out_dir, "diffusion_ema_latest.pth"))
     print(f"  [CKPT] Saved epoch {epoch:03d} + EMA to {out_dir}")
 
@@ -114,13 +83,12 @@ def save_sample_images(
     epoch: int,
     out_dir: str,
     device: str,
-    guidance_scale: float = 2.0,
+    guidance_scale: float = 3.0,
     num_inference_steps: int = 50,
 ):
     """
-    DDIM Sampling [Technique #13] + Classifier-Free Guidance [Technique #3]:
-    - Uses DDIM scheduler: generates full image in 50 steps (vs 1000 for DDPM).
-    - Applies CFG: mixes conditional and unconditional predictions for sharper outputs.
+    DDIM Sampling + Classifier-Free Guidance:
+    Generates a sample image and saves a side-by-side panel [IR | Generated | Ground Truth].
     """
     import cv2
 
@@ -132,20 +100,21 @@ def save_sample_images(
     with torch.no_grad():
         ir_sample   = ir_batch[:1].to(device)
         real_rgb    = rgb_batch[:1].to(device)
-        uncond_ir   = torch.zeros_like(ir_sample)  # "empty" condition for CFG
+        uncond_ir   = torch.zeros_like(ir_sample)
 
-        noisy_rgb   = torch.randn_like(real_rgb)
+        # Start from pure noise
+        noisy_rgb   = torch.randn(1, 3, ir_sample.shape[2], ir_sample.shape[3], device=device)
 
         for t in tqdm(ddim.timesteps, desc=f"DDIM Sampling (Ep {epoch})", leave=False):
             t_batch = torch.tensor([t], device=device, dtype=torch.long)
 
-            # Conditional noise prediction
-            noise_cond  = model(noisy_rgb, ir_sample,  t_batch)
+            # Conditional noise prediction (with IR conditioning)
+            noise_cond   = model(noisy_rgb, ir_sample, t_batch, is_unconditional=False)
             # Unconditional noise prediction (blank IR)
-            noise_uncond = model(noisy_rgb, uncond_ir, t_batch)
+            noise_uncond = model(noisy_rgb, uncond_ir, t_batch, is_unconditional=True)
 
-            # Classifier-Free Guidance: scale = how strongly to follow the IR map
-            noise_pred  = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
+            # Classifier-Free Guidance
+            noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
 
             noisy_rgb = ddim.step(noise_pred, t, noisy_rgb).prev_sample
 
@@ -179,7 +148,7 @@ def train(args):
     print(f"  DrishtiIR Diffusion Training  |  Device: {device}")
     print(f"{'='*60}\n")
 
-    # ── Progressive Resolution [Technique #14] ────────────────────────────────
+    # ── Progressive Resolution ────────────────────────────────────────────────
     # Phase 1: train at 128px for first 30% of epochs (fast, learns structure)
     # Phase 2: fine-tune at 256px for remaining 70% (sharpens textures)
     total_epochs = args.num_epochs
@@ -193,9 +162,9 @@ def train(args):
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         tile_size=128,
-        val_split=0.0,  # No val split for phase 1 (speed)
+        val_split=0.0,
     )
-    # Phase 2 loader at 256x256 — with 10% validation split
+    # Phase 2 loader at 256x256 with 10% validation split
     loader_256, val_loader = get_dataloader(
         ir_dir=args.ir_dir,
         rgb_dir=args.rgb_dir,
@@ -209,6 +178,7 @@ def train(args):
     sample_ir, sample_rgb = next(iter(loader_256))
     in_channels = sample_ir.shape[1]
     print(f"  Input channels (IR bands): {in_channels}")
+    print(f"  Dataset size: {len(loader_256.dataset)} training images")
     print(f"  Progressive Resolution: Phase 1 (128px) → Epoch {phase1_epochs} | Phase 2 (256px) → Epoch {total_epochs}\n")
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -216,30 +186,37 @@ def train(args):
         ir_channels=in_channels, rgb_channels=3, image_size=256
     ).to(device)
 
-    # EMA Model [Technique #4]
+    # Count params
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  Model parameters: {total_params:,}\n")
+
+    # EMA Model
     ema = EMAModel(model, decay=0.9999)
 
-    # Cosine noise scheduler [Technique #2]
+    # Cosine noise scheduler
     noise_scheduler = get_ddpm_scheduler()
 
     # ── Checkpoint Resume ─────────────────────────────────────────────────────
     start_epoch = 1
     ckpt_path = os.path.join(args.checkpoint_dir, "diffusion_latest.pth")
     if os.path.exists(ckpt_path):
-        model.load_state_dict(torch.load(ckpt_path, map_location=device), strict=False)
-        print(f"  [RESUME] Loaded checkpoint: {ckpt_path}")
-        # Try to infer start epoch from saved files
-        saved = sorted(
-            [f for f in os.listdir(args.checkpoint_dir) if f.startswith("diffusion_epoch_")],
-        )
-        if saved:
-            last_epoch = int(saved[-1].split("_")[-1].replace(".pth", ""))
-            start_epoch = last_epoch + 1
-            print(f"  [RESUME] Continuing from Epoch {start_epoch}\n")
+        try:
+            state = torch.load(ckpt_path, map_location=device)
+            model.load_state_dict(state, strict=False)
+            print(f"  [RESUME] Loaded checkpoint: {ckpt_path}")
+            saved = sorted(
+                [f for f in os.listdir(args.checkpoint_dir) if f.startswith("diffusion_epoch_")],
+            )
+            if saved:
+                last_epoch = int(saved[-1].split("_")[-1].replace(".pth", ""))
+                start_epoch = last_epoch + 1
+                print(f"  [RESUME] Continuing from Epoch {start_epoch}\n")
+        except Exception as e:
+            print(f"  [WARN] Could not load checkpoint ({e}), starting fresh.\n")
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     lr_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
-    
+
     # Prepare everything via Accelerator
     model, optimizer, loader_128, loader_256, lr_scheduler = accelerator.prepare(
         model, optimizer, loader_128, loader_256, lr_scheduler
@@ -270,14 +247,12 @@ def train(args):
             rgb_batch = rgb_batch.to(device)
 
             # ── Augmentations ─────────────────────────────────────────────────
-            # Spectral Augmentation [Technique #9]
             ir_batch = spectral_augment(ir_batch)
-            # GeoAug [Technique #7]
             ir_batch, rgb_batch = geospatial_augment(ir_batch, rgb_batch)
 
-            # ── Classifier-Free Guidance [Technique #3] ───────────────────────
-            # 10% of the time, replace IR conditioning with zeros (unconditional)
-            if torch.rand(1).item() < 0.10:
+            # ── Classifier-Free Guidance: 10% unconditional dropout ───────────
+            is_uncond = torch.rand(1).item() < 0.10
+            if is_uncond:
                 ir_cond = torch.zeros_like(ir_batch)
             else:
                 ir_cond = ir_batch
@@ -292,9 +267,9 @@ def train(args):
 
             # ── Forward & Backward via Accelerate ─────────────────────────────
             with accelerator.accumulate(model):
-                noise_pred = model(noisy_rgb, ir_cond, timesteps)
+                noise_pred = model(noisy_rgb, ir_cond, timesteps, is_unconditional=is_uncond)
 
-                # MSE loss (primary)
+                # Pure MSE noise prediction loss — stable and proven
                 loss = F.mse_loss(noise_pred, noise)
 
                 accelerator.backward(loss)
@@ -306,7 +281,6 @@ def train(args):
                 optimizer.zero_grad()
 
                 if accelerator.sync_gradients:
-                    # Update EMA weights [Technique #4]
                     ema.update(accelerator.unwrap_model(model))
 
             display_loss = loss.item()
@@ -358,19 +332,19 @@ def train(args):
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="DrishtiIR State-of-the-Art Diffusion Training")
+    parser = argparse.ArgumentParser(description="DrishtiIR Diffusion Training")
     parser.add_argument("--ir-dir",         type=str,   default=None)
     parser.add_argument("--rgb-dir",        type=str,   default=None)
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples_diffusion")
-    parser.add_argument("--num-epochs",     type=int,   default=100)
+    parser.add_argument("--num-epochs",     type=int,   default=300)
     parser.add_argument("--batch-size",     type=int,   default=4)
-    parser.add_argument("--grad-accum",     type=int,   default=1,   help="Gradient accumulation steps (simulates larger batch)")
-    parser.add_argument("--lr",             type=float, default=1e-4)
+    parser.add_argument("--grad-accum",     type=int,   default=2,   help="Gradient accumulation steps")
+    parser.add_argument("--lr",             type=float, default=2e-4)
     parser.add_argument("--save-every",     type=int,   default=10)
     parser.add_argument("--sample-every",   type=int,   default=5)
     parser.add_argument("--num-workers",    type=int,   default=0)
-    parser.add_argument("--guidance-scale", type=float, default=2.0,  help="CFG guidance scale (higher = more IR-conditioned)")
-    parser.add_argument("--ddim-steps",     type=int,   default=50,   help="Number of DDIM inference steps (default: 50, vs 1000 for DDPM)")
+    parser.add_argument("--guidance-scale", type=float, default=3.0,  help="CFG guidance scale")
+    parser.add_argument("--ddim-steps",     type=int,   default=50,   help="Number of DDIM inference steps")
     args = parser.parse_args()
     train(args)

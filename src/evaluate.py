@@ -100,9 +100,9 @@ def run_diffusion_inference(ckpt_path: str, ir_pre: np.ndarray, device: str, ddi
     with torch.no_grad():
         for t in ddim.timesteps:
             t_b = torch.tensor([t], device=device, dtype=torch.long)
-            cond_pred   = model(noisy, ir_t, t_b)
-            uncond_pred = model(noisy, uncond, t_b)
-            noise_pred  = uncond_pred + 2.0 * (cond_pred - uncond_pred)
+            cond_pred   = model(noisy, ir_t, t_b, is_unconditional=False)
+            uncond_pred = model(noisy, uncond, t_b, is_unconditional=True)
+            noise_pred  = uncond_pred + 3.0 * (cond_pred - uncond_pred)
             noisy = ddim.step(noise_pred, t, noisy).prev_sample
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 

@@ -1,13 +1,14 @@
 """
 model_diffusion.py
 ------------------
-State-of-the-art Conditional Diffusion Model for IR→RGB satellite colorization.
+Conditional Diffusion Model for IR→RGB satellite colorization.
 
-Optimizations:
-  - Cosine Beta Schedule     : Spends more time on fine-grain denoising (vs linear)
-  - AttnDownBlock2D          : Spatial cross-attention for precise IR conditioning
-  - DDIMScheduler            : Allows 50-step inference instead of 1000-step (20x faster)
-  - EMA (Exponential Moving Average) weights: Stable, smooth final model weights
+Architecture:
+  - Simple learned Conv projection for IR conditioning (no Tanh squashing)
+  - UNet2DModel from diffusers library
+  - Cosine beta schedule for better texture learning
+  - DDIM scheduler for fast 50-step inference
+  - EMA weights for stable final model
 """
 
 import copy
@@ -20,24 +21,42 @@ except ImportError:
     pass  # Handled in train script
 
 
-# ─── Conditional DDPM ─────────────────────────────────────────────────────────
+# ─── IR Feature Projector ─────────────────────────────────────────────────────
 
-try:
-    from src.model import SRModule
-except ImportError:
-    from model import SRModule
+class IRProjector(nn.Module):
+    """
+    Lightweight convolutional projector that extracts features from multi-band IR
+    input without destroying the signal.
+
+    Unlike the old SRModule(scale=1) which applied Tanh() and squashed the
+    conditioning signal, this uses LeakyReLU to preserve the full dynamic range.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int = None, features: int = 32):
+        super().__init__()
+        if out_channels is None:
+            out_channels = in_channels
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, features, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(features, features, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(features, out_channels, kernel_size=3, padding=1),
+            # No activation here — pass clean features to U-Net
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+# ─── Conditional DDPM ─────────────────────────────────────────────────────────
 
 class ConditionalDiffusionModel(nn.Module):
     """
-    Conditional DDPM with spatial attention blocks for IR→RGB generation.
+    Conditional DDPM for IR→RGB generation.
 
-    Architecture upgrades from baseline:
-    - Integrates SRModule to extract high-frequency structural details from IR before conditioning.
-    - All 4 blocks now use Attention (AttnDownBlock2D / AttnUpBlock2D)
-      This allows the U-Net to learn precise spatial correspondence between
-      thermal heat signatures and RGB pixel colors.
-    - Increased channel depth (64, 128, 256, 512) — within Kaggle VRAM budget
-      thanks to AMP training.
+    The IR conditioning is projected through a small conv network and
+    concatenated channel-wise with the noisy RGB before being fed to the U-Net.
     """
 
     def __init__(self, ir_channels: int = 1, rgb_channels: int = 3, image_size: int = 256):
@@ -45,25 +64,25 @@ class ConditionalDiffusionModel(nn.Module):
         self.ir_channels  = ir_channels
         self.rgb_channels = rgb_channels
 
-        # Connect SR Module to Diffusion Pipeline (Feature Extraction mode, scale=1 to maintain resolution)
-        self.sr_extractor = SRModule(in_channels=ir_channels, scale=1, features=32)
+        # Project IR bands to a fixed number of conditioning channels
+        self.ir_proj = IRProjector(in_channels=ir_channels, out_channels=ir_channels, features=32)
 
         self.unet = UNet2DModel(
             sample_size=image_size,
             in_channels=ir_channels + rgb_channels,
             out_channels=rgb_channels,
             layers_per_block=2,
-            block_out_channels=(32, 64, 128, 256),
+            block_out_channels=(64, 128, 256, 256),
             down_block_types=(
                 "DownBlock2D",
-                "DownBlock2D",
-                "DownBlock2D",
+                "AttnDownBlock2D",
+                "AttnDownBlock2D",
                 "DownBlock2D",
             ),
             up_block_types=(
                 "UpBlock2D",
-                "UpBlock2D",
-                "UpBlock2D",
+                "AttnUpBlock2D",
+                "AttnUpBlock2D",
                 "UpBlock2D",
             ),
         )
@@ -73,16 +92,16 @@ class ConditionalDiffusionModel(nn.Module):
         noisy_rgb: torch.Tensor,    # (B, 3, H, W)
         ir_cond: torch.Tensor,      # (B, C, H, W) — can be zeros for CFG uncond
         timesteps: torch.Tensor,    # (B,)
+        is_unconditional: bool = False,  # Skip IR projection for zero-input CFG
     ) -> torch.Tensor:
-        """Predict the noise residual from the noisy RGB conditioned on SR-enhanced IR."""
-        
-        # If unconditional (zeros), we bypass SR to avoid learning SR artifacts on zeros
-        if (ir_cond == 0).all():
-            sr_ir = ir_cond
-        else:
-            sr_ir = self.sr_extractor(ir_cond)
+        """Predict the noise residual from the noisy RGB conditioned on IR."""
 
-        net_input = torch.cat([sr_ir, noisy_rgb], dim=1)
+        if is_unconditional:
+            proj_ir = ir_cond  # Already zeros, no need to project
+        else:
+            proj_ir = self.ir_proj(ir_cond)
+
+        net_input = torch.cat([proj_ir, noisy_rgb], dim=1)
         return self.unet(net_input, timesteps).sample
 
 
