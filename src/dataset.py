@@ -106,8 +106,8 @@ class LandsatIRDataset(Dataset):
 
         # Handle RGB arrays
         if rgb_arr.max() > 255.0:
-            rgb_arr = np.clip(rgb_arr, VIS_DN_MIN, VIS_DN_MAX)
-            rgb_arr = (rgb_arr - VIS_DN_MIN) / (VIS_DN_MAX - VIS_DN_MIN)
+            rgb_arr = np.clip(rgb_arr, RGB_DN_MIN, RGB_DN_MAX)
+            rgb_arr = (rgb_arr - RGB_DN_MIN) / (RGB_DN_MAX - RGB_DN_MIN)
         elif rgb_arr.max() > 1.0:
             rgb_arr = rgb_arr / 255.0
 
