@@ -33,7 +33,7 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
     search = catalog.search(
         collections=["landsat-c2-l2"],
         bbox=bbox,
-        datetime="2023-01-01/2023-12-31",
+        datetime="2023-01-01/2023-03-31",
         query={"eo:cloud_cover": {"lt": 5}}, 
         max_items=num_scenes
     )
@@ -94,5 +94,5 @@ def fetch_massive_dataset(num_scenes=1000, crop_size=256, output_dir='data/train
     print(f"\nFinished! Successfully downloaded {success_count} multi-band pairs.")
 
 if __name__ == '__main__':
-    # Scaling to 500 for massive Kaggle run
-    fetch_massive_dataset(num_scenes=500, crop_size=512)
+    # Scaling to 100 as requested to prevent STAC API aggregation timeouts
+    fetch_massive_dataset(num_scenes=100, crop_size=512)
