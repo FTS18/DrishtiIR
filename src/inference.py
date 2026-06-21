@@ -83,15 +83,30 @@ def preprocess_png(path: str, tile_size: int = TILE_SIZE) -> np.ndarray:
 
 def preprocess_array(arr: np.ndarray, tile_size: int = TILE_SIZE) -> np.ndarray:
     """
-    Accepts a raw 2D numpy array (e.g., from Streamlit uploaded bytes),
-    resizes and normalizes to [-1, 1].
+    Accepts a raw 2D numpy array (e.g., from Streamlit uploaded bytes).
+    If it's a massive full scene, we take a center crop to preserve the spatial
+    scale (100m/pixel) the model was trained on.
     """
     if arr.ndim == 3:
         arr = arr[:, :, 0]   # Take first channel if multi-channel
-    arr = cv2.resize(arr, (tile_size, tile_size)).astype(np.float32)
-    # Auto-scale: assume data range is either [0, 255] or [0, 65535]
-    if arr.max() > 1.0:
-        arr = arr / arr.max()
+        
+    h, w = arr.shape
+    if h > tile_size and w > tile_size:
+        # It's a huge raw scene. Take a center crop to preserve scale.
+        cy, cx = h // 2, w // 2
+        half = tile_size // 2
+        arr = arr[cy - half : cy + half, cx - half : cx + half].astype(np.float32)
+    else:
+        # It's already a patch, just resize to ensure exact dimensions
+        arr = cv2.resize(arr, (tile_size, tile_size)).astype(np.float32)
+    
+    # Check if this is a 16-bit Landsat thermal image
+    if arr.max() > 255.0:
+        arr = np.clip(arr, IR_DN_MIN, IR_DN_MAX)
+        arr = (arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
+    elif arr.max() > 1.0:
+        arr = arr / 255.0
+        
     arr = arr * 2.0 - 1.0
     return arr[np.newaxis, :, :]   # (1, H, W)
 
