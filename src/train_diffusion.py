@@ -320,12 +320,20 @@ def train(args):
         if epoch == phase2_start:
             print(f"\n  [PROG-RES] Switching to 256×256 resolution at Epoch {epoch}\n")
         optimizer.zero_grad()
-        pbar = tqdm(loader, desc=f"Epoch {epoch:03d}/{total_epochs}", leave=False)
+        
+        expected_steps = len(loader)
+        if args.limit_batches is not None and args.limit_batches < expected_steps:
+            expected_steps = args.limit_batches
+            
+        pbar = tqdm(loader, total=expected_steps, desc=f"Epoch {epoch:03d}/{total_epochs}", leave=False)
+        
+        steps_taken = 0
 
         for step, (ir_batch, rgb_batch) in enumerate(pbar):
             if args.limit_batches is not None and step >= args.limit_batches:
                 break
-
+            
+            steps_taken += 1
             ir_batch  = ir_batch.to(device)
             rgb_batch = rgb_batch.to(device)
 
@@ -396,7 +404,7 @@ def train(args):
             total_loss  += display_loss
             pbar.set_postfix(loss=f"{display_loss:.4f}")
 
-        avg_loss = total_loss / len(loader)
+        avg_loss = total_loss / max(1, steps_taken)
         lr_scheduler.step()
 
         print(f"Epoch {epoch:03d} | Loss: {avg_loss:.4f} | LR: {lr_scheduler.get_last_lr()[0]:.2e}")
