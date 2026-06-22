@@ -141,6 +141,42 @@ def save_sample_images(
     model.train()
 
 
+# ─── Advanced Losses (Holy Trinity) ──────────────────────────────────────────
+
+import torchvision.models as models
+
+class EdgeLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.register_buffer("sobel_x", sobel_x.repeat(3, 1, 1, 1))
+        self.register_buffer("sobel_y", sobel_y.repeat(3, 1, 1, 1))
+
+    def forward(self, pred, target):
+        pred_x = F.conv2d(pred, self.sobel_x, padding=1, groups=3)
+        pred_y = F.conv2d(pred, self.sobel_y, padding=1, groups=3)
+        target_x = F.conv2d(target, self.sobel_x, padding=1, groups=3)
+        target_y = F.conv2d(target, self.sobel_y, padding=1, groups=3)
+        return F.l1_loss(pred_x, target_x) + F.l1_loss(pred_y, target_y)
+
+class PerceptualLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        vgg = models.vgg16(weights=models.VGG16_Weights.DEFAULT).features[:16].eval()
+        for param in vgg.parameters():
+            param.requires_grad = False
+        self.vgg = vgg
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, pred, target):
+        pred_01 = (pred + 1.0) / 2.0
+        target_01 = (target + 1.0) / 2.0
+        pred_norm = (pred_01 - self.mean) / self.std
+        target_norm = (target_01 - self.mean) / self.std
+        return F.mse_loss(self.vgg(pred_norm), self.vgg(target_norm))
+
 # ─── Training Loop ────────────────────────────────────────────────────────────
 
 from accelerate import Accelerator
@@ -265,6 +301,11 @@ def train(args):
     if val_loader is not None:
         val_loader = accelerator.prepare(val_loader)
 
+    # Initialize Advanced Losses
+    print("  [LOSS] Initializing Edge-Preservation and Perceptual (VGG) Losses...")
+    edge_criterion = EdgeLoss().to(device)
+    perc_criterion = PerceptualLoss().to(device)
+
     # ── Training Loop ─────────────────────────────────────────────────────────
     for epoch in range(start_epoch, total_epochs + 1):
         model.train()
@@ -330,8 +371,12 @@ def train(args):
                 pred_x0 = (noisy_rgb - torch.sqrt(1.0 - alpha_t) * noise_pred) / torch.sqrt(alpha_t)
                 color_loss = F.l1_loss(pred_x0, rgb_batch)
 
+                # 3. Advanced Losses (Holy Trinity)
+                edge_loss = edge_criterion(pred_x0, rgb_batch)
+                perc_loss = perc_criterion(pred_x0, rgb_batch)
+
                 # Combine: Min-SNR noise_loss for structure, color_loss for global tint
-                loss = noise_loss + (0.5 * color_loss)
+                loss = noise_loss + (0.5 * color_loss) + (0.2 * edge_loss) + (0.05 * perc_loss)
 
                 accelerator.backward(loss)
 
