@@ -195,6 +195,11 @@ def train(args):
         ir_channels=in_channels, rgb_channels=3, image_size=256
     ).to(device)
 
+    # ── Speed Optimization ────────────────────────────────────────────────────
+    if hasattr(torch, "compile"):
+        print("  [SPEED] Compiling model with torch.compile() for max throughput...")
+        model = torch.compile(model)
+
     # Count params
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {total_params:,}")
@@ -357,9 +362,9 @@ if __name__ == "__main__":
     parser.add_argument("--rgb-dir",        type=str,   default=None)
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples_diffusion")
-    parser.add_argument("--num-epochs",     type=int,   default=500)
-    # L40S has 48GB VRAM — batch 16 at 256px fits easily and fills the GPU properly
-    parser.add_argument("--batch-size",     type=int,   default=16)
+    parser.add_argument("--num-epochs",     type=int,   default=150)
+    # L40S has 48GB VRAM — batch 32 at 256px fits easily and trains 2x faster than 16
+    parser.add_argument("--batch-size",     type=int,   default=32)
     # With batch=16 we don't need grad accumulation
     parser.add_argument("--grad-accum",     type=int,   default=1,   help="Gradient accumulation steps (1 = off)")
     parser.add_argument("--lr",             type=float, default=5e-4,  help="LR scales with batch size: sqrt(16/4)*2e-4")
