@@ -685,7 +685,6 @@ with tab_live:
     """, unsafe_allow_html=True)
 
     m = folium.Map(location=[22.0, 79.0], zoom_start=5, tiles="CartoDB dark_matter")
-    m.add_child(folium.LatLngPopup())
     
     st_data = st_folium(m, width=1000, height=450)
     
