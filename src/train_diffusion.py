@@ -380,7 +380,9 @@ def train(args):
                 perc_loss = perc_criterion(pred_x0, rgb_batch)
 
                 # Combine: Min-SNR noise_loss for structure, color_loss for global tint
-                loss = noise_loss + (0.5 * color_loss) + (0.2 * edge_loss) + (0.05 * perc_loss)
+                # VGG perc_loss is unscaled (typically in the 1000s), so we weight it very small (0.0002)
+                # so it guides textures without overpowering the color math!
+                loss = noise_loss + (0.5 * color_loss) + (0.1 * edge_loss) + (0.0002 * perc_loss)
 
                 accelerator.backward(loss)
 
