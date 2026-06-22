@@ -686,7 +686,7 @@ with tab_live:
 
     m = folium.Map(location=[22.0, 79.0], zoom_start=5, tiles="CartoDB dark_matter")
     
-    st_data = st_folium(m, width=1000, height=450)
+    st_data = st_folium(m, width=1000, height=450, returned_objects=["last_clicked"])
     
     if st_data and st_data.get("last_clicked"):
         lat = st_data["last_clicked"]["lat"]
