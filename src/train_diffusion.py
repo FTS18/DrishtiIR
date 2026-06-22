@@ -215,6 +215,7 @@ def train(args):
         num_workers=args.num_workers,
         tile_size=128,
         val_split=0.0,
+        limit_data=args.limit_data,
     )
     # Phase 2 loader at 256x256 with 10% validation split
     loader_256, val_loader = get_dataloader(
@@ -224,6 +225,7 @@ def train(args):
         num_workers=args.num_workers,
         tile_size=256,
         val_split=0.10,
+        limit_data=args.limit_data,
     )
 
     # Detect in_channels from first batch
@@ -450,6 +452,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-dir", type=str,   default="checkpoints")
     parser.add_argument("--sample-dir",     type=str,   default="samples_diffusion")
     parser.add_argument("--num-epochs",     type=int,   default=150)
+    parser.add_argument("--limit-data",     type=int,   default=None, help="Limit number of training images for faster epochs")
     # L40S has 48GB VRAM — batch 32 at 256px fits easily and trains 2x faster than 16
     parser.add_argument("--batch-size",     type=int,   default=32)
     # With batch=16 we don't need grad accumulation

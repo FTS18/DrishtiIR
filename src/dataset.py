@@ -225,6 +225,7 @@ def get_dataloader(
     stride: int = None,
     augment: bool = True,
     synthetic: bool = False,      # Kept for backward-compat, always ignored
+    limit_data: int = None,       # Limit number of files loaded
 ) -> "DataLoader | tuple[DataLoader, DataLoader | None]":
     """
     Returns a DataLoader (or train/val pair) for real Landsat .npy data.
@@ -248,6 +249,9 @@ def get_dataloader(
         full_dataset = LandsatIRDataset(
             ir_dir=ir_dir, rgb_dir=rgb_dir, tile_size=tile_size,
         )
+
+    if limit_data is not None and limit_data < len(full_dataset):
+        full_dataset = torch.utils.data.Subset(full_dataset, range(limit_data))
 
     if val_split > 0.0:
         n_val   = max(1, int(len(full_dataset) * val_split))
