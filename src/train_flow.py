@@ -74,7 +74,8 @@ def save_sample_images(model, ir_batch, rgb_batch, epoch, out_dir, device,
         x = torch.randn(1, 3, ir_s.shape[2], ir_s.shape[3], device=device)
 
         for t in scheduler.timesteps:
-            t_b = torch.tensor([t], device=device, dtype=torch.long)
+            t_val = t.item() if torch.is_tensor(t) else t
+            t_b = torch.tensor([int(t_val)], device=device, dtype=torch.long)
             v_cond   = model(x, ir_s,   t_b)
             v_uncond = model(x, uncond,  t_b)
             v_pred   = v_uncond + guidance_scale * (v_cond - v_uncond)

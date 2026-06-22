@@ -86,7 +86,8 @@ def run_diffusion_inference_app(ir_pre: np.ndarray, ddim_steps: int = 5, guidanc
     t0 = time.perf_counter()
     with torch.no_grad():
         for t in scheduler.timesteps:
-            t_b         = torch.tensor([t], device=DEVICE, dtype=torch.long)
+            t_val       = t.item() if torch.is_tensor(t) else t
+            t_b         = torch.tensor([int(t_val)], device=DEVICE, dtype=torch.long)
             cond_pred   = diff_model(noisy, ir_t,   t_b)
             uncond_pred = diff_model(noisy, uncond,  t_b)
             noise_pred  = uncond_pred + guidance_scale * (cond_pred - uncond_pred)
