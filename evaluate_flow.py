@@ -44,10 +44,12 @@ def load_flow_model(ckpt_path: str, device: str):
 
 
 @torch.no_grad()
-def run_flow(model, ir_t, scheduler, guidance_scale, device):
+def run_flow(model, ir_t, guidance_scale, device, flow_steps):
     uncond = torch.zeros_like(ir_t)
     # Start from pure noise
     x = torch.randn(1, 3, ir_t.shape[2], ir_t.shape[3], device=device)
+    
+    scheduler = get_flow_inference_scheduler(num_inference_steps=flow_steps)
     
     for t in scheduler.timesteps:
         t_val = t.item() if torch.is_tensor(t) else t
@@ -99,7 +101,7 @@ def main():
             ir_t = ir_t.repeat(1, 4, 1, 1)
 
         t0   = time.perf_counter()
-        fake = run_flow(model, ir_t, scheduler, args.guidance, device)
+        fake = run_flow(model, ir_t, args.guidance, device, args.flow_steps)
         times.append((time.perf_counter() - t0) * 1000.0)
 
         # Denormalize → uint8
