@@ -365,11 +365,11 @@ def train(args):
                 alpha_t = alphas_cumprod[timesteps].view(-1, 1, 1, 1)
                 
                 # Calculate Signal-to-Noise Ratio (SNR) for current timesteps
-                snr = alpha_t / (1.0 - alpha_t)
+                snr = alpha_t / torch.clamp(1.0 - alpha_t, min=1e-5)
                 snr_gamma = 5.0
                 
                 # For epsilon (noise) prediction, Min-SNR weight is min(snr_gamma, snr) / snr
-                min_snr_weight = torch.clamp(snr, max=snr_gamma) / snr
+                min_snr_weight = torch.clamp(snr, max=snr_gamma) / torch.clamp(snr, min=1e-5)
                 
                 # 1. Min-SNR Weighted MSE Noise Loss
                 raw_noise_loss = F.mse_loss(noise_pred, noise, reduction="none")
@@ -377,7 +377,8 @@ def train(args):
 
                 # 2. Explicit Color Alignment Loss (L1 on predicted x0)
                 # Recover x0 estimate from predicted noise to penalize global color drift
-                pred_x0 = (noisy_rgb - torch.sqrt(1.0 - alpha_t) * noise_pred) / torch.sqrt(alpha_t)
+                pred_x0 = (noisy_rgb - torch.sqrt(1.0 - alpha_t) * noise_pred) / torch.clamp(torch.sqrt(alpha_t), min=1e-5)
+                pred_x0 = torch.clamp(pred_x0, -1.0, 1.0) # Prevent exploding x0 estimates at high timesteps
                 color_loss = F.l1_loss(pred_x0, rgb_batch)
 
                 # 3. Advanced Losses (Holy Trinity)
