@@ -79,7 +79,7 @@ def main():
     model     = load_flow_model(args.ckpt, device)
     scheduler = get_flow_inference_scheduler(num_inference_steps=args.flow_steps)
 
-    loader, _ = get_dataloader(
+    loader = get_dataloader(
         ir_dir=args.ir_dir, rgb_dir=args.rgb_dir,
         batch_size=1, num_workers=2,
         tile_size=256, tiled=False, augment=False,
