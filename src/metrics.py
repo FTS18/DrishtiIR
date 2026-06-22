@@ -135,7 +135,7 @@ def compute_fid(
 
     # FID = ||mu_r - mu_f||^2 + Tr(sigma_r + sigma_f - 2 * sqrt(sigma_r @ sigma_f))
     diff = mu_r - mu_f
-    covmean, _ = linalg.sqrtm(sigma_r @ sigma_f, disp=False)
+    covmean = linalg.sqrtm(sigma_r @ sigma_f)
 
     if np.iscomplexobj(covmean):
         covmean = covmean.real
