@@ -195,6 +195,14 @@ def train(args):
         ir_channels=in_channels, rgb_channels=3, image_size=256
     ).to(device)
 
+    # ── Speed Optimization: xFormers (Flash Attention) ────────────────────────
+    try:
+        import xformers
+        model.unet.enable_xformers_memory_efficient_attention()
+        print("  [SPEED] Enabled xFormers memory efficient attention (Flash Attention)!")
+    except ImportError:
+        print("  [SPEED] xFormers not installed, using standard attention.")
+
     # ── Speed Optimization ────────────────────────────────────────────────────
     # Note: torch.compile() is currently disabled. It triggers a known PyTorch/Sympy
     # compiler bug (pow_by_natural) in this specific Python 3.12 environment.
@@ -231,7 +239,14 @@ def train(args):
         except Exception as e:
             print(f"  [WARN] Could not load checkpoint ({e}), starting fresh.\n")
 
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    # ── Optimizer: 8-bit AdamW ────────────────────────────────────────────────
+    try:
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        print("  [SPEED] Enabled 8-bit AdamW optimizer (Saves VRAM, trains faster)!")
+    except ImportError:
+        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        
     lr_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
 
     # Prepare everything via Accelerator
