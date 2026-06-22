@@ -54,13 +54,20 @@ def spectral_augment(ir_batch: torch.Tensor) -> torch.Tensor:
 
 
 def geospatial_augment(ir_batch: torch.Tensor, rgb_batch: torch.Tensor) -> tuple:
-    """Random horizontal/vertical flip for rotation invariance."""
+    """Random flips and 90-degree rotations for maximum spatial invariance."""
     if torch.rand(1).item() > 0.5:
         ir_batch  = torch.flip(ir_batch,  dims=[3])
         rgb_batch = torch.flip(rgb_batch, dims=[3])
     if torch.rand(1).item() > 0.5:
         ir_batch  = torch.flip(ir_batch,  dims=[2])
         rgb_batch = torch.flip(rgb_batch, dims=[2])
+        
+    # Extreme Augmentation: Random 90, 180, 270 degree rotations (0% runtime cost)
+    k = torch.randint(0, 4, (1,)).item()
+    if k > 0:
+        ir_batch = torch.rot90(ir_batch, k, [2, 3])
+        rgb_batch = torch.rot90(rgb_batch, k, [2, 3])
+        
     return ir_batch, rgb_batch
 
 
@@ -247,7 +254,9 @@ def train(args):
     except ImportError:
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         
-    lr_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
+    from torch.optim.lr_scheduler import OneCycleLR
+    # OneCycleLR pushes learning rate 5x higher in the middle to blast through local minimums
+    lr_scheduler = OneCycleLR(optimizer, max_lr=args.lr * 5.0, epochs=total_epochs, steps_per_epoch=1)
 
     # Prepare everything via Accelerator
     model, optimizer, loader_128, loader_256, lr_scheduler = accelerator.prepare(
