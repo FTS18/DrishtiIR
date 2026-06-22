@@ -196,9 +196,12 @@ def train(args):
     ).to(device)
 
     # ── Speed Optimization ────────────────────────────────────────────────────
-    if hasattr(torch, "compile"):
-        print("  [SPEED] Compiling model with torch.compile() for max throughput...")
-        model = torch.compile(model)
+    # Note: torch.compile() is currently disabled. It triggers a known PyTorch/Sympy
+    # compiler bug (pow_by_natural) in this specific Python 3.12 environment.
+    # The L40S is fast enough with BF16 + TF32 + batch_size=32 anyway!
+    # if hasattr(torch, "compile"):
+    #     print("  [SPEED] Compiling model with torch.compile() for max throughput...")
+    #     model = torch.compile(model)
 
     # Count params
     total_params = sum(p.numel() for p in model.parameters())
