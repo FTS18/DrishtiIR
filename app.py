@@ -614,6 +614,8 @@ with tab_single:
                 # Semantic correction
                 if semantic_strength > 0:
                     land_mask = classify_landcover(ir_preprocessed)
+                    if land_mask.shape != rgb_out.shape[:2]:
+                        land_mask = cv2.resize(land_mask, (rgb_out.shape[1], rgb_out.shape[0]), interpolation=cv2.INTER_NEAREST)
                     rgb_out = apply_semantic_correction(rgb_out, land_mask, strength=semantic_strength)
 
             ir_3ch = cv2.cvtColor(ir_disp, cv2.COLOR_GRAY2RGB)
