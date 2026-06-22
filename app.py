@@ -33,8 +33,8 @@ from src.sr_module import apply_super_resolution
 # ── Diffusion / Flow Model Inference ──────────────────────────────────────────────────
 
 # Prefer Flow Matching model (4-step, fast) over DDPM (50-step, slow)
-FLOW_CKPT      = "checkpoints/flow_ema_latest.pth"
-DIFFUSION_CKPT = "checkpoints/diffusion_ema_latest.pth"
+FLOW_CKPT      = "checkpoints/flow_latest.pth"
+DIFFUSION_CKPT = "checkpoints/diffusion_latest.pth"
 USE_FLOW       = os.path.exists(FLOW_CKPT)
 
 @st.cache_resource(show_spinner=False)
