@@ -224,7 +224,6 @@ def get_dataloader(
     tiled: bool = True,           # Use overlapping tiles for max data
     stride: int = None,
     augment: bool = True,
-    synthetic: bool = False,      # Kept for backward-compat, always ignored
     limit_data: int = None,       # Limit number of files loaded
 ) -> "DataLoader | tuple[DataLoader, DataLoader | None]":
     """

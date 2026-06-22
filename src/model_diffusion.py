@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 
 try:
-    from diffusers import UNet2DModel, DDPMScheduler, DDIMScheduler
+    from diffusers import UNet2DModel, DDPMScheduler, DDIMScheduler, FlowMatchEulerDiscreteScheduler
 except ImportError:
     pass  # Handled in train script
 
@@ -154,6 +154,40 @@ def get_ddim_scheduler(num_train_timesteps: int = 1000, num_inference_steps: int
         num_train_timesteps=num_train_timesteps,
         beta_schedule="squaredcos_cap_v2",
         clip_sample=True,
+    )
+    scheduler.set_timesteps(num_inference_steps)
+    return scheduler
+
+
+# ─── Flow Matching Schedulers (Rectified Flow) ────────────────────────────────
+
+def get_flow_train_scheduler(num_train_timesteps: int = 1000) -> "FlowMatchEulerDiscreteScheduler":
+    """
+    Flow Matching training scheduler (Stable Diffusion 3 / FLUX style).
+
+    Key difference from DDPM:
+    - Uses a LINEAR interpolation path: x_t = (1-t)*x0 + t*noise
+    - This creates a STRAIGHT path from image to noise
+    - Straight path = model only needs 4-8 inference steps (vs 50+ for DDIM)
+    - Training is also 2-3x faster because the loss landscape is much simpler
+
+    Loss target: velocity v = noise - x0 (constant for all t)
+    """
+    return FlowMatchEulerDiscreteScheduler(
+        num_train_timesteps=num_train_timesteps,
+        shift=1.0,      # No time-shift warping (use 3.0 for higher-res like SD3)
+    )
+
+
+def get_flow_inference_scheduler(num_inference_steps: int = 4) -> "FlowMatchEulerDiscreteScheduler":
+    """
+    Flow Matching inference scheduler.
+    Needs only 4 steps to produce results as good as DDIM at 50 steps.
+    At 8 steps it matches or beats DDPM quality.
+    """
+    scheduler = FlowMatchEulerDiscreteScheduler(
+        num_train_timesteps=1000,
+        shift=1.0,
     )
     scheduler.set_timesteps(num_inference_steps)
     return scheduler

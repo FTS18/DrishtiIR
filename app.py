@@ -22,40 +22,42 @@ from src.fetch_real_data import fetch_single_coordinate
 sys.path.insert(0, os.path.dirname(__file__))
 
 from src.model import Generator
-from src.dataset import SyntheticIRDataset, denormalize
+from src.dataset import denormalize
 from src.inference import load_generator, preprocess_array, preprocess_png, run_inference, compute_metrics, preprocess_array as _preprocess
 from src.metrics import compute_psnr, compute_ssim, compute_fid, compute_all_metrics, verify_coregistration
 from src.semantic_mask import classify_landcover, get_semantic_color_map, apply_semantic_correction
 from src.detection import compare_detection, DETECTION_AVAILABLE
+from src.sr_module import apply_super_resolution
 
 
-# ── Diffusion Model Inference ──────────────────────────────────────────────────
+# ── Diffusion / Flow Model Inference ──────────────────────────────────────────────────
 
+# Prefer Flow Matching model (4-step, fast) over DDPM (50-step, slow)
+FLOW_CKPT      = "checkpoints/flow_ema_latest.pth"
 DIFFUSION_CKPT = "checkpoints/diffusion_ema_latest.pth"
+USE_FLOW       = os.path.exists(FLOW_CKPT)
 
 @st.cache_resource(show_spinner=False)
 def load_diffusion_model():
-    """Load the trained Diffusion EMA model."""
+    """Load Flow (preferred) or DDPM EMA model."""
+    ckpt = FLOW_CKPT if USE_FLOW else DIFFUSION_CKPT
     try:
         from src.model_diffusion import ConditionalDiffusionModel
-        # Try to detect in_channels from checkpoint
-        state = torch.load(DIFFUSION_CKPT, map_location=DEVICE)
-        # Infer from first conv weight shape
-        first_key = [k for k in state.keys() if 'weight' in k][0]
-        # unet.conv_in.weight shape: (out, in, k, k) — in = ir_channels + rgb_channels
+        state = torch.load(ckpt, map_location=DEVICE)
         in_total = state.get("unet.conv_in.weight", torch.zeros(1, 4)).shape[1]
-        ir_ch = in_total - 3  # RGB is always 3
-        model = ConditionalDiffusionModel(ir_channels=max(1, ir_ch), rgb_channels=3, image_size=256)
+        ir_ch = max(1, in_total - 3)
+        model = ConditionalDiffusionModel(ir_channels=ir_ch, rgb_channels=3, image_size=256)
         model.load_state_dict(state, strict=False)
         model.to(DEVICE).eval()
+        kind = "Flow Matching (4-step)" if USE_FLOW else "DDPM (DDIM 5-step)"
+        print(f"  [Inference] Loaded {kind} model: {ckpt}")
         return model
     except Exception as e:
         return None
 
 
-def run_diffusion_inference_app(ir_pre: np.ndarray, ddim_steps: int = 50, guidance_scale: float = 2.0):
-    """Run DDIM + CFG inference using the EMA diffusion model. Returns (ir_disp, rgb_out, ms)."""
-    from src.model_diffusion import get_ddim_scheduler
+def run_diffusion_inference_app(ir_pre: np.ndarray, ddim_steps: int = 5, guidance_scale: float = 2.0):
+    """Run Flow Matching (4 steps) or DDIM inference. Returns (ir_disp, rgb_out, ms)."""
     from src.dataset import denormalize as _denorm
     import time
 
@@ -63,24 +65,42 @@ def run_diffusion_inference_app(ir_pre: np.ndarray, ddim_steps: int = 50, guidan
     if diff_model is None:
         return None, None, 0.0
 
-    scheduler = get_ddim_scheduler(num_inference_steps=ddim_steps)
-    ir_t    = torch.tensor(ir_pre, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-    uncond  = torch.zeros_like(ir_t)
-    noisy   = torch.randn(1, 3, 256, 256, device=DEVICE)
+    # Pick scheduler based on which model we loaded
+    if USE_FLOW:
+        from src.model_diffusion import get_flow_inference_scheduler
+        scheduler = get_flow_inference_scheduler(num_inference_steps=4)
+    else:
+        from src.model_diffusion import get_ddim_scheduler
+        scheduler = get_ddim_scheduler(num_inference_steps=ddim_steps)
+
+    ir_t = torch.tensor(ir_pre, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+
+    # Model was trained with 4-channel multiband IR.
+    # If we only have 1 channel (grayscale upload), tile it to 4 channels.
+    if ir_t.shape[1] == 1:
+        ir_t = ir_t.repeat(1, 4, 1, 1)
+
+    uncond = torch.zeros_like(ir_t)
+    noisy  = torch.randn(1, 3, 256, 256, device=DEVICE)
 
     t0 = time.perf_counter()
     with torch.no_grad():
         for t in scheduler.timesteps:
-            t_b        = torch.tensor([t], device=DEVICE, dtype=torch.long)
-            cond_pred  = diff_model(noisy, ir_t,   t_b)
-            uncond_pred = diff_model(noisy, uncond, t_b)
-            noise_pred = uncond_pred + guidance_scale * (cond_pred - uncond_pred)
-            noisy      = scheduler.step(noise_pred, t, noisy).prev_sample
+            t_b         = torch.tensor([t], device=DEVICE, dtype=torch.long)
+            cond_pred   = diff_model(noisy, ir_t,   t_b)
+            uncond_pred = diff_model(noisy, uncond,  t_b)
+            noise_pred  = uncond_pred + guidance_scale * (cond_pred - uncond_pred)
+            noisy       = scheduler.step(noise_pred, t, noisy).prev_sample
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-    ir_disp  = _denorm(ir_pre[0])
-    rgb_out  = _denorm(noisy[0].permute(1, 2, 0).cpu().numpy())
+    ir_disp = _denorm(ir_pre[0])
+    rgb_out = _denorm(noisy[0].permute(1, 2, 0).cpu().numpy())
+
+    # ── Super-Resolution 2x upscale (256 → 512) ───────────────────────────────
+    rgb_out = apply_super_resolution(rgb_out, device=DEVICE)
+
     return ir_disp, rgb_out, elapsed_ms
+
 
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -529,8 +549,8 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_single, tab_live, tab_demo, tab_batch, tab_compare, tab_detect, tab_eval, tab_about = st.tabs([
-    "Single Image", "Live Map", "Demo Mode", "Batch Evaluate",
+tab_single, tab_live, tab_batch, tab_compare, tab_detect, tab_eval, tab_about = st.tabs([
+    "Single Image", "Live Map", "Batch Evaluate",
     "GAN vs Diffusion", "Object Detection", "Evaluation", "About"
 ])
 
@@ -566,8 +586,7 @@ with tab_single:
 
     with col_output:
         if uploaded is not None:
-            with st.spinner("Running IR to RGB inference..."):
-                gen = load_model()
+            with st.spinner("Running Diffusion Model inference..."):
                 img_bytes = uploaded.getvalue()
                 try:
                     import rasterio
@@ -576,7 +595,7 @@ with tab_single:
                         with memfile.open() as src:
                             img_arr = src.read(1)
                             if img_arr.ndim == 2:
-                                img_arr = img_arr[:, :, np.newaxis] # add channel dim for cvtColor logic below if needed, though it's 1 channel
+                                img_arr = img_arr[:, :, np.newaxis]
                 except:
                     # Fallback for PNG/JPG
                     img_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
@@ -589,7 +608,7 @@ with tab_single:
                 else:
                     img_gray = img_arr.squeeze()
                 ir_preprocessed = preprocess_array(img_gray, tile_size=tile_size)
-                ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_preprocessed, DEVICE)
+                ir_disp, rgb_out, elapsed_ms = run_diffusion_inference_app(ir_preprocessed)
                 rgb_out = apply_post_processing(rgb_out)
                 # Semantic correction
                 if semantic_strength > 0:
@@ -675,17 +694,13 @@ with tab_live:
         
         try:
             with st.spinner("Querying STAC API & downloading thermal data..."):
-                # Load model first to check input channels
-                gen = load_model()
-                in_channels = gen.enc1.block[0].weight.shape[1]
-                multi_band = (in_channels == 3)
-                
+                # Diffusion model always uses 4-channel multiband IR
+                multi_band = True
                 ir_data, scene_id = fetch_single_coordinate(lat, lon, crop_size=tile_size, multi_band=multi_band)
             
-            with st.spinner("Running Pix2Pix GAN..."):
-                gen = load_model()
+            with st.spinner("Running Diffusion Model..."):
                 ir_pre = preprocess_array(ir_data, tile_size)
-                ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_pre, DEVICE)
+                ir_disp, rgb_out, elapsed_ms = run_diffusion_inference_app(ir_pre)
                 rgb_out = apply_post_processing(rgb_out)
                 
             st.success(f"Successfully colorized scene: {scene_id} in {elapsed_ms:.0f} ms")
@@ -703,78 +718,7 @@ with tab_live:
         except Exception as e:
             st.error(f"Failed to process location: {e}")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 3 — Demo Mode
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-with tab_demo:
-    st.markdown("""
-    <div class="sw-card">
-        <div class="sw-card-title">Synthetic IR Scene Generator</div>
-        <div style="color:#7A8FAD;font-size:0.82rem;font-family:'Bricolage Grotesque',monospace;">
-            Procedurally generates a synthetic thermal scene and runs the colorization model in real time.<br>
-            Use this to test without real Landsat data.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    demo_col1, demo_col2 = st.columns([1, 2], gap="large")
-
-    with demo_col1:
-        seed_val    = st.slider("Scene Seed",      min_value=0,   max_value=999, value=42)
-        num_blobs   = st.slider("Thermal Blobs",   min_value=1,   max_value=8,   value=4)
-        noise_level = st.slider("Noise Level",     min_value=0.0, max_value=0.3, value=0.05, step=0.01)
-        run_demo    = st.button("Generate and Colorize", use_container_width=True)
-
-    with demo_col2:
-        if run_demo:
-            with st.spinner("Generating scene and running inference..."):
-                rng = np.random.default_rng(seed_val)
-                H = W = tile_size
-                background = rng.uniform(0.05, 0.35, (H, W)).astype(np.float32)
-                for _ in range(num_blobs):
-                    cx = rng.integers(20, W - 20)
-                    cy = rng.integers(20, H - 20)
-                    radius = rng.integers(12, 45)
-                    intensity = rng.uniform(0.55, 1.0)
-                    y_c, x_c = np.ogrid[:H, :W]
-                    mask = (x_c - cx)**2 + (y_c - cy)**2 <= radius**2
-                    background[mask] = np.maximum(background[mask], intensity)
-                background += rng.normal(0, noise_level, background.shape).astype(np.float32)
-                background = np.clip(background, 0, 1)
-                ir_arr = (background * 2.0 - 1.0)[np.newaxis, :, :]
-                gen = load_model()
-                ir_disp, rgb_out, elapsed_ms = run_inference(gen, ir_arr, DEVICE)
-                rgb_out = apply_post_processing(rgb_out)
-
-            d_col1, d_col2, d_col3 = st.columns(3)
-            with d_col1:
-                st.markdown('<div class="sw-img-label">Synthetic Thermal IR</div>', unsafe_allow_html=True)
-                st.image(ir_disp, use_container_width=True, clamp=True)
-            with d_col2:
-                st.markdown('<div class="sw-img-label">Colorized RGB</div>', unsafe_allow_html=True)
-                st.image(rgb_out, use_container_width=True, clamp=True)
-            with d_col3:
-                st.markdown(f"""
-                <div class="sw-card" style="margin-top:0;">
-                    <div class="sw-card-title">Run Stats</div>
-                    <table class="sw-table">
-                        <tr><td class="mid">Inference</td><td class="red">{elapsed_ms:.0f} ms</td></tr>
-                        <tr><td class="mid">Seed</td><td>{seed_val}</td></tr>
-                        <tr><td class="mid">Blobs</td><td>{num_blobs}</td></tr>
-                        <tr><td class="mid">Noise</td><td>{noise_level:.2f}</td></tr>
-                        <tr><td class="mid">Tile</td><td>{tile_size}x{tile_size}</td></tr>
-                        <tr><td class="mid">Device</td><td>{DEVICE.upper()}</td></tr>
-                    </table>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="sw-empty">
-                <div class="sw-empty-icon">[GEN]</div>
-                <div>Click Generate to create a synthetic thermal scene</div>
-            </div>
-            """, unsafe_allow_html=True)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -800,14 +744,13 @@ with tab_batch:
     )
 
     if batch_files:
-        gen = load_model()
         results = []
         progress_bar = st.progress(0, text="Processing images...")
         for i, f in enumerate(batch_files):
             img_pil = Image.open(f).convert("L")
             img_arr = np.array(img_pil)
             ir_pre = preprocess_array(img_arr, tile_size)
-            ir_disp, rgb_out, ms = run_inference(gen, ir_pre, DEVICE)
+            ir_disp, rgb_out, ms = run_diffusion_inference_app(ir_pre)
             rgb_out = apply_post_processing(rgb_out)
             results.append({
                 "filename": f.name,
@@ -1081,7 +1024,6 @@ with tab_eval:
     run_eval = st.button("Run Full Evaluation Suite", use_container_width=True)
 
     if run_eval and eval_ir_files and eval_rgb_files:
-        gen = load_model()
         fake_rgbs, real_rgbs, coregistration_scores = [], [], []
         sem_masks_html = []
 
@@ -1098,7 +1040,7 @@ with tab_eval:
             real_rgb = np.array(rgb_pil)
 
             # Run inference
-            ir_disp, fake_rgb, _ = run_inference(gen, ir_pre, DEVICE)
+            ir_disp, fake_rgb, _ = run_diffusion_inference_app(ir_pre)
 
             # Semantic correction
             if semantic_strength > 0:
