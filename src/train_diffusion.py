@@ -290,9 +290,13 @@ def train(args):
     except ImportError:
         optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         
-    from torch.optim.lr_scheduler import OneCycleLR
-    # OneCycleLR pushes learning rate 5x higher in the middle to blast through local minimums
-    lr_scheduler = OneCycleLR(optimizer, max_lr=args.lr * 5.0, epochs=total_epochs, steps_per_epoch=1)
+    from diffusers.optimization import get_cosine_schedule_with_warmup
+    # Stable cosine scheduler (Diffusion models melt at high learning rates)
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=10,
+        num_training_steps=total_epochs
+    )
 
     # Prepare everything via Accelerator
     model, optimizer, loader_128, loader_256, lr_scheduler = accelerator.prepare(
