@@ -508,18 +508,10 @@ with st.sidebar:
             # Convert the model's structural output to grayscale, then apply a professional 
             # Geographic Terrain colormap so it looks exactly like a real satellite map!
             # Water becomes dark blue, vegetation becomes green, urban/land becomes brown/white.
-            # The model currently outputs a blue-heavy image.
-            # We mathematically blend the channels to map the blue intensity 
-            # into natural earth tones (green vegetation, brownish soil, dark water).
-            r = rgb_array[:, :, 0].astype(np.float32)
-            g = rgb_array[:, :, 1].astype(np.float32)
-            b = rgb_array[:, :, 2].astype(np.float32)
-            
-            new_g = b * 0.9 + g * 0.4
-            new_b = b * 0.25
-            new_r = r * 0.7 + b * 0.1
-            
-            rgb_array = np.stack([new_r, new_g, new_b], axis=-1).clip(0, 255).astype(np.uint8)
+            import matplotlib.pyplot as plt
+            gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
+            mapped = plt.get_cmap('gist_earth')(gray / 255.0)
+            rgb_array = (mapped[:, :, :3] * 255).astype(np.uint8)
 
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
