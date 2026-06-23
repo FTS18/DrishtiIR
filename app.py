@@ -48,7 +48,8 @@ def load_diffusion_model():
         ir_ch = max(1, in_total - 3)
         model = ConditionalDiffusionModel(ir_channels=ir_ch, rgb_channels=3, image_size=256)
         model.load_state_dict(state, strict=False)
-        model.to(DEVICE).eval()
+        # Ensure model is float32 to prevent bfloat16 silent NaNs on older CPUs
+        model.to(DEVICE).to(torch.float32).eval()
         kind = "Flow Matching (4-step)" if USE_FLOW else "DDPM (DDIM 5-step)"
         print(f"  [Inference] Loaded {kind} model: {ckpt}")
         return model
