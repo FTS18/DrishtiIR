@@ -505,11 +505,12 @@ with st.sidebar:
 
     def apply_post_processing(rgb_array):
         if natural_color:
-            # Map the dominant blue tint to green (vegetation), and make the new blue darker
-            new_r = rgb_array[:, :, 0]
-            new_g = rgb_array[:, :, 2]
-            new_b = (rgb_array[:, :, 1] * 0.5).astype(np.uint8)
-            rgb_array = np.stack([new_r, new_g, new_b], axis=-1)
+            # Convert the model's structural output to grayscale, then apply a professional 
+            # Geographic Terrain colormap so it looks exactly like a real satellite map!
+            # Water becomes dark blue, vegetation becomes green, urban/land becomes brown/white.
+            gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
+            mapped = cv2.applyColorMap(gray, cv2.COLORMAP_TERRAIN)
+            rgb_array = cv2.cvtColor(mapped, cv2.COLOR_BGR2RGB)
 
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
