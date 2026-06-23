@@ -536,8 +536,8 @@ with st.sidebar:
             new_rgb[v_idx, 1] = gray[v_idx] * 110 + 30
             new_rgb[v_idx, 2] = gray[v_idx] * 60 + 20
             
-            # Bare Soil
-            s_idx = (mask == 4)
+            # Bare Soil (Urban / Bare)
+            s_idx = (mask == 3)
             new_rgb[s_idx, 0] = gray[s_idx] * 160 + 50
             new_rgb[s_idx, 1] = gray[s_idx] * 130 + 40
             new_rgb[s_idx, 2] = gray[s_idx] * 90 + 30
