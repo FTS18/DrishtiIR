@@ -128,10 +128,12 @@ def fetch_single_coordinate(lat, lon, crop_size=256, multi_band=False):
     # Fetch SWIR and NIR for multi-band
     with rasterio.open(item.assets["swir16"].href) as src:
         b6_data = src.read(1, window=window)
+    with rasterio.open(item.assets["swir22"].href) as src:
+        b7_data = src.read(1, window=window)
     with rasterio.open(item.assets["nir08"].href) as src:
         b5_data = src.read(1, window=window)
         
-    return np.stack([b10_data, b6_data, b5_data]), item.id
+    return np.stack([b5_data, b6_data, b7_data, b10_data]), item.id
 
 if __name__ == '__main__':
     fetch_planetary_computer_data(num_scenes=20, crop_size=512)
