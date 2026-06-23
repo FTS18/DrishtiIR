@@ -106,18 +106,17 @@ def preprocess_array(arr: np.ndarray, tile_size: int = TILE_SIZE) -> np.ndarray:
             resized.append(cv2.resize(arr[i], (tile_size, tile_size)))
         arr = np.stack(resized).astype(np.float32)
     
-    # Check if this is a 16-bit Landsat thermal image
-    if arr.max() > 255.0:
-        if c == 1:
-            arr = np.clip(arr, IR_DN_MIN, IR_DN_MAX)
-            arr = (arr - IR_DN_MIN) / (IR_DN_MAX - IR_DN_MIN)
-        else:
-            arr = np.clip(arr, 0.0, 65535.0)
-            arr = arr / 65535.0
-    elif arr.max() > 1.0:
-        arr = arr / 255.0
+    # Match training data: per-channel min-max normalization
+    if arr.max() > 1.0:
+        for ch in range(arr.shape[0]):
+            lo, hi = arr[ch].min(), arr[ch].max()
+            if hi > lo:
+                arr[ch] = (arr[ch] - lo) / (hi - lo) * 2.0 - 1.0
+            else:
+                arr[ch] = 0.0
+    else:
+        arr = arr * 2.0 - 1.0
         
-    arr = arr * 2.0 - 1.0
     return arr
 
 
