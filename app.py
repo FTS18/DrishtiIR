@@ -508,9 +508,10 @@ with st.sidebar:
             # Convert the model's structural output to grayscale, then apply a professional 
             # Geographic Terrain colormap so it looks exactly like a real satellite map!
             # Water becomes dark blue, vegetation becomes green, urban/land becomes brown/white.
+            import matplotlib.pyplot as plt
             gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
-            mapped = cv2.applyColorMap(gray, cv2.COLORMAP_TERRAIN)
-            rgb_array = cv2.cvtColor(mapped, cv2.COLOR_BGR2RGB)
+            mapped = plt.get_cmap('terrain')(gray / 255.0)
+            rgb_array = (mapped[:, :, :3] * 255).astype(np.uint8)
 
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
