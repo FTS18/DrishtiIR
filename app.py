@@ -501,18 +501,7 @@ with st.sidebar:
     contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
     saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
     semantic_strength = st.slider("Semantic Correction", 0.0, 1.0, 0.25, 0.05, help="Nudges water→blue, vegetation→green using spectral indices")
-    natural_color = st.toggle("Shift to Natural Green", value=True, help="Instantly shifts the blue tint to natural green/brown earth tones for presentation.")
-
     def apply_post_processing(rgb_array):
-        if natural_color:
-            # Convert the model's structural output to grayscale, then apply a professional 
-            # Geographic Terrain colormap so it looks exactly like a real satellite map!
-            # Water becomes dark blue, vegetation becomes green, urban/land becomes brown/white.
-            import matplotlib.pyplot as plt
-            gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
-            mapped = plt.get_cmap('gist_earth')(gray / 255.0)
-            rgb_array = (mapped[:, :, :3] * 255).astype(np.uint8)
-
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
             pil_img = ImageEnhance.Sharpness(pil_img).enhance(sharpness)
