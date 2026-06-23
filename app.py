@@ -501,8 +501,16 @@ with st.sidebar:
     contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
     saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
     semantic_strength = st.slider("Semantic Correction", 0.0, 1.0, 0.25, 0.05, help="Nudges water→blue, vegetation→green using spectral indices")
+    natural_color = st.toggle("Shift to Natural Green", value=True, help="Instantly shifts the blue tint to natural green/brown earth tones for presentation.")
 
     def apply_post_processing(rgb_array):
+        if natural_color:
+            # Map the dominant blue tint to green (vegetation), and make the new blue darker
+            new_r = rgb_array[:, :, 0]
+            new_g = rgb_array[:, :, 2]
+            new_b = (rgb_array[:, :, 1] * 0.5).astype(np.uint8)
+            rgb_array = np.stack([new_r, new_g, new_b], axis=-1)
+
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
             pil_img = ImageEnhance.Sharpness(pil_img).enhance(sharpness)
