@@ -515,9 +515,9 @@ with st.sidebar:
             g = rgb_array[:, :, 1].astype(np.float32)
             b = rgb_array[:, :, 2].astype(np.float32)
             
-            new_g = b * 0.8 + g * 0.2
-            new_b = b * 0.3
-            new_r = r * 1.5 + b * 0.2
+            new_g = b * 0.9 + g * 0.4
+            new_b = b * 0.25
+            new_r = r * 0.7 + b * 0.1
             
             rgb_array = np.stack([new_r, new_g, new_b], axis=-1).clip(0, 255).astype(np.uint8)
 
