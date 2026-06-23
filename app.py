@@ -81,7 +81,7 @@ def run_diffusion_inference_app(ir_pre: np.ndarray, ddim_steps: int = 5, guidanc
         ir_t = ir_t.repeat(1, 4, 1, 1)
 
     uncond = torch.zeros_like(ir_t)
-    noisy  = torch.randn(1, 3, 256, 256, device=DEVICE)
+    noisy  = torch.randn(1, 3, ir_t.shape[2], ir_t.shape[3], device=DEVICE)
 
     t0 = time.perf_counter()
     with torch.no_grad():
