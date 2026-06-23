@@ -507,7 +507,7 @@ with st.sidebar:
         if physics_colorizer and ir_pre_array is not None and ir_pre_array.shape[1] >= 3:
             # Smart Hack: The AI structure is perfect, but colors are blue.
             # We use the raw NDVI/NDWI data to paint the structure realistically!
-            ir_np = ir_pre_array[0].cpu().numpy() if hasattr(ir_pre_array, 'cpu') else ir_pre_array[0]
+            ir_np = ir_pre_array.cpu().numpy() if hasattr(ir_pre_array, 'cpu') else ir_pre_array
             if isinstance(ir_np, torch.Tensor):
                 ir_np = ir_np.cpu().numpy()
             ir_np = (ir_np + 1.0) / 2.0  # Denormalize to [0, 1]
@@ -747,7 +747,7 @@ with tab_live:
                 
                 # Semantic correction natively for Live Map too
                 if semantic_strength > 0:
-                    ir_np = ir_pre[0].cpu().numpy() if hasattr(ir_pre[0], 'cpu') else ir_pre[0]
+                    ir_np = ir_pre.cpu().numpy() if hasattr(ir_pre, 'cpu') else ir_pre
                     if isinstance(ir_np, torch.Tensor):
                         ir_np = ir_np.cpu().numpy()
                     ir_np = (ir_np + 1.0) / 2.0
