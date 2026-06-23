@@ -103,8 +103,7 @@ def load_sr_model(device: str = "cpu") -> "ESPCN | None":
         model = ESPCN(in_channels=3, upscale_factor=2)
         state = torch.load(SR_CKPT, map_location=device)
         model.load_state_dict(state)
-        # Ensure model is float32 to prevent bfloat16 silent NaNs on CPU
-        model.to(device).to(torch.float32).eval()
+        model.to(device).eval()
         _sr_model = model
         return model
     except Exception as e:

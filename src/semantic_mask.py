@@ -70,16 +70,10 @@ def classify_landcover(ir_band: np.ndarray) -> np.ndarray:
         mask[thermal < WATER_THERMAL_MAX] = 1  # Cool = possibly water
         return mask
 
-    if C == 4:
-        # Fetch data is [B5 (NIR), B6 (SWIR1), B7 (SWIR2), B10 (Thermal)]
-        nir     = ir_band[0]
-        swir    = ir_band[1]
-        thermal = ir_band[3]
-    else:
-        # Fallback for 3-band [B10, B6, B5]
-        thermal = ir_band[0]
-        swir    = ir_band[1]
-        nir     = ir_band[2]
+    # Multi-band: [B10=Thermal, B6=SWIR, B5=NIR]
+    thermal = ir_band[0]
+    swir    = ir_band[1]
+    nir     = ir_band[2]
 
     # Water: cool thermal + low SWIR (water absorbs SWIR)
     water_mask = (thermal < WATER_THERMAL_MAX) & (swir < WATER_SWIR_MAX)

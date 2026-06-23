@@ -27,10 +27,6 @@ build/
 venv/
 env/
 
-# Scratch / temp scripts
-fix_fonts.py
-remove_emojis.py
-
 # Jupyter
 .ipynb_checkpoints/
 

@@ -48,8 +48,7 @@ def load_diffusion_model():
         ir_ch = max(1, in_total - 3)
         model = ConditionalDiffusionModel(ir_channels=ir_ch, rgb_channels=3, image_size=256)
         model.load_state_dict(state, strict=False)
-        # Ensure model is float32 to prevent bfloat16 silent NaNs on older CPUs
-        model.to(DEVICE).to(torch.float32).eval()
+        model.to(DEVICE).eval()
         kind = "Flow Matching (4-step)" if USE_FLOW else "DDPM (DDIM 5-step)"
         print(f"  [Inference] Loaded {kind} model: {ckpt}")
         return model
@@ -502,8 +501,7 @@ with st.sidebar:
     contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
     saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
     semantic_strength = st.slider("Semantic Correction", 0.0, 1.0, 0.25, 0.05, help="Nudges water→blue, vegetation→green using spectral indices")
-
-    def apply_post_processing(rgb_array, ir_pre_array=None):
+    def apply_post_processing(rgb_array):
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
             pil_img = ImageEnhance.Sharpness(pil_img).enhance(sharpness)
@@ -611,7 +609,7 @@ with tab_single:
                     img_gray = img_arr.squeeze()
                 ir_preprocessed = preprocess_array(img_gray, tile_size=tile_size)
                 ir_disp, rgb_out, elapsed_ms = run_diffusion_inference_app(ir_preprocessed)
-                rgb_out = apply_post_processing(rgb_out, ir_preprocessed)
+                rgb_out = apply_post_processing(rgb_out)
                 # Semantic correction
                 if semantic_strength > 0:
                     land_mask = classify_landcover(ir_preprocessed)
@@ -704,19 +702,7 @@ with tab_live:
             with st.spinner("Running Diffusion Model..."):
                 ir_pre = preprocess_array(ir_data, tile_size)
                 ir_disp, rgb_out, elapsed_ms = run_diffusion_inference_app(ir_pre)
-                
-                # Semantic correction natively for Live Map too
-                if semantic_strength > 0:
-                    ir_np = ir_pre.cpu().numpy() if hasattr(ir_pre, 'cpu') else ir_pre
-                    if isinstance(ir_np, torch.Tensor):
-                        ir_np = ir_np.cpu().numpy()
-                    ir_np = (ir_np + 1.0) / 2.0
-                    land_mask = classify_landcover(ir_np)
-                    if land_mask.shape != rgb_out.shape[:2]:
-                        land_mask = cv2.resize(land_mask, (rgb_out.shape[1], rgb_out.shape[0]), interpolation=cv2.INTER_NEAREST)
-                    rgb_out = apply_semantic_correction(rgb_out, land_mask, strength=semantic_strength)
-
-                rgb_out = apply_post_processing(rgb_out, ir_pre)
+                rgb_out = apply_post_processing(rgb_out)
                 
             st.success(f"Successfully colorized scene: {scene_id} in {elapsed_ms:.0f} ms")
             
