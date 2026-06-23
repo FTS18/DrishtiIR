@@ -501,49 +501,8 @@ with st.sidebar:
     contrast = st.slider("Contrast", 0.0, 3.0, 1.0, 0.1)
     saturation = st.slider("Saturation", 0.0, 3.0, 1.0, 0.1)
     semantic_strength = st.slider("Semantic Correction", 0.0, 1.0, 0.25, 0.05, help="Nudges water→blue, vegetation→green using spectral indices")
-    physics_colorizer = st.toggle("Smart Physics Colorizer (Demo Hack)", value=True, help="Overrides untrained AI colors by mathematically painting the AI's structural output using physical NDVI and NDWI indices from the satellite.")
 
     def apply_post_processing(rgb_array, ir_pre_array=None):
-        if physics_colorizer and ir_pre_array is not None and ir_pre_array.shape[1] >= 3:
-            # Smart Hack: The AI structure is perfect, but colors are blue.
-            # We use the raw NDVI/NDWI data to paint the structure realistically!
-            ir_np = ir_pre_array.cpu().numpy() if hasattr(ir_pre_array, 'cpu') else ir_pre_array
-            if isinstance(ir_np, torch.Tensor):
-                ir_np = ir_np.cpu().numpy()
-            ir_np = (ir_np + 1.0) / 2.0  # Denormalize to [0, 1]
-            
-            mask = classify_landcover(ir_np)
-            if mask.shape != rgb_array.shape[:2]:
-                mask = cv2.resize(mask, (rgb_array.shape[1], rgb_array.shape[0]), interpolation=cv2.INTER_NEAREST)
-                
-            gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-            new_rgb = np.zeros_like(rgb_array, dtype=np.float32)
-            
-            # Base (Urban/Unknown)
-            new_rgb[:, :, 0] = gray * 150 + 40
-            new_rgb[:, :, 1] = gray * 140 + 40
-            new_rgb[:, :, 2] = gray * 130 + 30
-            
-            # Water
-            w_idx = (mask == 1)
-            new_rgb[w_idx, 0] = gray[w_idx] * 40
-            new_rgb[w_idx, 1] = gray[w_idx] * 90 + 20
-            new_rgb[w_idx, 2] = gray[w_idx] * 140 + 60
-            
-            # Vegetation
-            v_idx = (mask == 2)
-            new_rgb[v_idx, 0] = gray[v_idx] * 50 + 10
-            new_rgb[v_idx, 1] = gray[v_idx] * 110 + 30
-            new_rgb[v_idx, 2] = gray[v_idx] * 60 + 20
-            
-            # Bare Soil (Urban / Bare)
-            s_idx = (mask == 3)
-            new_rgb[s_idx, 0] = gray[s_idx] * 160 + 50
-            new_rgb[s_idx, 1] = gray[s_idx] * 130 + 40
-            new_rgb[s_idx, 2] = gray[s_idx] * 90 + 30
-            
-            rgb_array = np.clip(new_rgb, 0, 255).astype(np.uint8)
-
         pil_img = Image.fromarray(rgb_array)
         if sharpness != 1.0:
             pil_img = ImageEnhance.Sharpness(pil_img).enhance(sharpness)
